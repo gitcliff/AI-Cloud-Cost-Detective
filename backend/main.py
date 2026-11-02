@@ -4,13 +4,20 @@ import os
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Depends
 from fastapi.middleware.cors import CORSMiddleware
 
 from ai_analyzer import analyze_aws_resources
+from auth import get_current_user, hash_password, verify_password, create_token
 from aws_scanner import get_regions, scan_region
-from db import create_pool, create_tables, create_pending_analysis, update_analysis, get_history, get_analysis_by_id
-from models import AnalyzeRequest, AnalyzeResponse, RegionInfo
+from db import (
+    create_pool, create_tables, create_pending_analysis, update_analysis,
+    get_history, get_analysis_by_id, get_user_by_email, create_user,
+)
+from models import (
+    AnalyzeRequest, AnalyzeResponse, AuthResponse, LoginRequest,
+    RegionInfo, SignupRequest,
+)
 
 load_dotenv()
 
@@ -41,6 +48,46 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ── Auth endpoints ──────────────────────────────────────────────────────────
+
+
+@app.post("/api/auth/signup", response_model=AuthResponse)
+async def signup(request: SignupRequest):
+    pool = app.state.db_pool
+
+    if len(request.password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+
+    hashed = await hash_password(request.password)
+
+    try:
+        user_id = await create_user(pool, request.email, hashed)
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+    token = create_token(user_id)
+    return AuthResponse(token=token, user_id=user_id)
+
+
+@app.post("/api/auth/login", response_model=AuthResponse)
+async def login(request: LoginRequest):
+    pool = app.state.db_pool
+
+    user = await get_user_by_email(pool, request.email)
+    if user is None:
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    valid = await verify_password(request.password, user["password_hash"])
+    if not valid:
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    token = create_token(user["id"])
+    return AuthResponse(token=token, user_id=user["id"])
+
+
+# ── Protected endpoints ─────────────────────────────────────────────────────
 
 
 async def _push_progress(analysis_id: int, step: str, percent: int) -> None:
@@ -93,12 +140,12 @@ async def _run_analysis(analysis_id: int, region: str) -> None:
 
 
 @app.get("/api/regions", response_model=list[RegionInfo])
-async def list_regions():
+async def list_regions(user_id: int = Depends(get_current_user)):
     return get_regions()
 
 
 @app.post("/api/analyze", response_model=AnalyzeResponse)
-async def analyze(request: AnalyzeRequest):
+async def analyze(request: AnalyzeRequest, user_id: int = Depends(get_current_user)):
     valid_ids = {r["id"] for r in get_regions()}
     if request.region not in valid_ids:
         raise HTTPException(status_code=400, detail=f"Invalid region: {request.region}")
@@ -106,7 +153,7 @@ async def analyze(request: AnalyzeRequest):
     pool = app.state.db_pool
 
     # Create a pending analysis row so we have an ID for WebSocket tracking
-    analysis_id = await create_pending_analysis(pool, user_id=None, region=request.region)
+    analysis_id = await create_pending_analysis(pool, user_id=user_id, region=request.region)
 
     # Set up a progress queue before launching the background task
     progress_queues[analysis_id] = asyncio.Queue()
@@ -123,7 +170,6 @@ async def websocket_progress(websocket: WebSocket, analysis_id: int):
 
     queue = progress_queues.get(analysis_id)
     if not queue:
-        # Analysis might already be done or doesn't exist
         await websocket.send_json({"step": "No active analysis found", "percent": -1})
         await websocket.close()
         return
@@ -141,14 +187,13 @@ async def websocket_progress(websocket: WebSocket, analysis_id: int):
 
 
 @app.get("/api/history")
-async def list_history():
+async def list_history(user_id: int = Depends(get_current_user)):
     pool = app.state.db_pool
-    # user_id=None until auth is added in Phase 4
-    return await get_history(pool, user_id=None)
+    return await get_history(pool, user_id=user_id)
 
 
 @app.get("/api/history/{analysis_id}")
-async def get_history_detail(analysis_id: int):
+async def get_history_detail(analysis_id: int, user_id: int = Depends(get_current_user)):
     pool = app.state.db_pool
     result = await get_analysis_by_id(pool, analysis_id)
     if result is None:
