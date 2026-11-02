@@ -61,8 +61,8 @@ def scan_ec2(session: boto3.Session) -> list[dict]:
                         ),
                     })
         return instances
-    except (ClientError, Exception) as e:
-        logger.warning(f"Failed to scan EC2: {e}")
+    except ClientError as e:
+        logger.warning("Failed to scan EC2: %s", e)
         return []
 
 
@@ -85,8 +85,8 @@ def scan_rds(session: boto3.Session) -> list[dict]:
                     "publicly_accessible": db.get("PubliclyAccessible", False),
                 })
         return instances
-    except (ClientError, Exception) as e:
-        logger.warning(f"Failed to scan RDS: {e}")
+    except ClientError as e:
+        logger.warning("Failed to scan RDS: %s", e)
         return []
 
 
@@ -127,8 +127,8 @@ def scan_s3(session: boto3.Session, target_region: str) -> list[dict]:
 
             buckets.append(info)
         return buckets
-    except (ClientError, Exception) as e:
-        logger.warning(f"Failed to scan S3: {e}")
+    except ClientError as e:
+        logger.warning("Failed to scan S3: %s", e)
         return []
 
 
@@ -150,8 +150,8 @@ def scan_ebs(session: boto3.Session) -> list[dict]:
                     "name": _get_name_tag(vol.get("Tags")),
                 })
         return volumes
-    except (ClientError, Exception) as e:
-        logger.warning(f"Failed to scan EBS: {e}")
+    except ClientError as e:
+        logger.warning("Failed to scan EBS: %s", e)
         return []
 
 
@@ -168,8 +168,8 @@ def scan_elastic_ips(session: boto3.Session) -> list[dict]:
                 "instance_id": addr.get("InstanceId", ""),
             })
         return eips
-    except (ClientError, Exception) as e:
-        logger.warning(f"Failed to scan Elastic IPs: {e}")
+    except ClientError as e:
+        logger.warning("Failed to scan Elastic IPs: %s", e)
         return []
 
 
@@ -222,8 +222,8 @@ def scan_load_balancers(session: boto3.Session) -> list[dict]:
             pass
 
         return lbs
-    except (ClientError, Exception) as e:
-        logger.warning(f"Failed to scan Load Balancers: {e}")
+    except ClientError as e:
+        logger.warning("Failed to scan Load Balancers: %s", e)
         return []
 
 
@@ -265,8 +265,8 @@ def scan_lambda(session: boto3.Session) -> list[dict]:
                     "invocations_last_30d": invocations,
                 })
         return functions
-    except (ClientError, Exception) as e:
-        logger.warning(f"Failed to scan Lambda: {e}")
+    except ClientError as e:
+        logger.warning("Failed to scan Lambda: %s", e)
         return []
 
 
@@ -307,8 +307,8 @@ def scan_nat_gateways(session: boto3.Session) -> list[dict]:
                 "bytes_out_7d": bytes_out,
             })
         return gateways
-    except (ClientError, Exception) as e:
-        logger.warning(f"Failed to scan NAT Gateways: {e}")
+    except ClientError as e:
+        logger.warning("Failed to scan NAT Gateways: %s", e)
         return []
 
 
