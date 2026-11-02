@@ -51,6 +51,36 @@ async def create_tables(pool: asyncpg.Pool) -> None:
     logger.info("Database tables verified")
 
 
+async def get_user_by_email(pool: asyncpg.Pool, email: str) -> dict | None:
+    """Return a user row by email, or None if not found."""
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT id, email, password_hash FROM users WHERE email = $1",
+            email,
+        )
+    if row is None:
+        return None
+    return {"id": row["id"], "email": row["email"], "password_hash": row["password_hash"]}
+
+
+async def create_user(pool: asyncpg.Pool, email: str, password_hash: str) -> int:
+    """Insert a new user and return the user id."""
+    async with pool.acquire() as conn:
+        try:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO users (email, password_hash)
+                VALUES ($1, $2)
+                RETURNING id
+                """,
+                email,
+                password_hash,
+            )
+        except asyncpg.UniqueViolationError:
+            raise ValueError("A user with this email already exists")
+    return row["id"]
+
+
 async def insert_analysis(
     pool: asyncpg.Pool,
     user_id: int | None,
