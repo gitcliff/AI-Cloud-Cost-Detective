@@ -17,12 +17,33 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+function GuestRoute({ children }: { children: React.ReactNode }) {
+  if (isAuthenticated()) {
+    return <Navigate to="/" replace />;
+  }
+  return <>{children}</>;
+}
+
 export default function App() {
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100">
       <Routes>
-        <Route path="/login" element={<Login />} />
-        <Route path="/signup" element={<Signup />} />
+        <Route
+          path="/login"
+          element={
+            <GuestRoute>
+              <Login />
+            </GuestRoute>
+          }
+        />
+        <Route
+          path="/signup"
+          element={
+            <GuestRoute>
+              <Signup />
+            </GuestRoute>
+          }
+        />
         <Route
           path="/*"
           element={

@@ -1,14 +1,15 @@
 import asyncio
 import logging
 import os
+import re
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Depends
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from ai_analyzer import analyze_aws_resources
-from auth import get_current_user, hash_password, verify_password, create_token
+from auth import get_current_user, hash_password, verify_password, create_token, decode_token_raw
 from aws_scanner import get_regions, scan_region
 from db import (
     create_pool, create_tables, create_pending_analysis, update_analysis,
@@ -18,6 +19,8 @@ from models import (
     AnalyzeRequest, AnalyzeResponse, AuthResponse, LoginRequest,
     RegionInfo, SignupRequest,
 )
+
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 load_dotenv()
 
@@ -56,6 +59,9 @@ app.add_middleware(
 @app.post("/api/auth/signup", response_model=AuthResponse)
 async def signup(request: SignupRequest):
     pool = app.state.db_pool
+
+    if not EMAIL_RE.match(request.email):
+        raise HTTPException(status_code=400, detail="Invalid email address")
 
     if len(request.password) < 8:
         raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
@@ -165,7 +171,21 @@ async def analyze(request: AnalyzeRequest, user_id: int = Depends(get_current_us
 
 
 @app.websocket("/ws/progress/{analysis_id}")
-async def websocket_progress(websocket: WebSocket, analysis_id: int):
+async def websocket_progress(
+    websocket: WebSocket,
+    analysis_id: int,
+    token: str = Query(default=""),
+):
+    # Validate JWT before accepting the WebSocket connection
+    if not token:
+        await websocket.close(code=4001, reason="Missing token")
+        return
+
+    user_id = decode_token_raw(token)
+    if user_id is None:
+        await websocket.close(code=4001, reason="Invalid or expired token")
+        return
+
     await websocket.accept()
 
     queue = progress_queues.get(analysis_id)
@@ -195,7 +215,7 @@ async def list_history(user_id: int = Depends(get_current_user)):
 @app.get("/api/history/{analysis_id}")
 async def get_history_detail(analysis_id: int, user_id: int = Depends(get_current_user)):
     pool = app.state.db_pool
-    result = await get_analysis_by_id(pool, analysis_id)
+    result = await get_analysis_by_id(pool, analysis_id, user_id=user_id)
     if result is None:
         raise HTTPException(status_code=404, detail="Analysis not found")
     return result

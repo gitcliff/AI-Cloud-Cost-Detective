@@ -77,6 +77,20 @@ def decode_token(token: str) -> int:
         )
 
 
+def decode_token_raw(token: str) -> int | None:
+    """Decode a JWT token and return the user_id, or None on any failure.
+    Use this for WebSocket auth where HTTP exceptions don't apply."""
+    secret = _get_jwt_secret()
+    algorithm = os.getenv("JWT_ALGORITHM", "HS256")
+
+    try:
+        payload = jwt.decode(token, secret, algorithms=[algorithm])
+        user_id = payload.get("sub")
+        return int(user_id) if user_id is not None else None
+    except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
+        return None
+
+
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security),
 ) -> int:
