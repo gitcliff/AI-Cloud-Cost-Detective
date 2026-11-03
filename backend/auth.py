@@ -44,7 +44,7 @@ def create_token(user_id: int) -> str:
     expire_hours = int(os.getenv("JWT_EXPIRE_HOURS", "24"))
 
     payload = {
-        "sub": user_id,
+        "sub": str(user_id),
         "exp": datetime.now(timezone.utc) + timedelta(hours=expire_hours),
         "iat": datetime.now(timezone.utc),
     }
