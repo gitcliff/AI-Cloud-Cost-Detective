@@ -8,6 +8,12 @@ interface Props {
 export default function ProgressTracker({ messages, currentPercent }: Props) {
   const failed = currentPercent === -1;
 
+  // On failure, show the last known positive percent instead of snapping to 0
+  const lastPositivePercent = messages
+    .filter((m) => m.percent > 0)
+    .reduce((max, m) => Math.max(max, m.percent), 0);
+  const displayPercent = failed ? lastPositivePercent : Math.max(0, currentPercent);
+
   return (
     <div className="mt-6 rounded-lg border border-gray-800 bg-gray-900 p-6">
       <h3 className="text-sm font-medium text-gray-400 mb-4">
@@ -20,7 +26,7 @@ export default function ProgressTracker({ messages, currentPercent }: Props) {
           className={`h-2 rounded-full transition-all duration-500 ${
             failed ? "bg-red-500" : "bg-blue-500"
           }`}
-          style={{ width: `${Math.max(0, currentPercent)}%` }}
+          style={{ width: `${displayPercent}%` }}
         />
       </div>
 

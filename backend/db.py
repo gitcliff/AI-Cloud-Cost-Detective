@@ -198,18 +198,32 @@ async def get_history(
 async def get_analysis_by_id(
     pool: asyncpg.Pool,
     analysis_id: int,
+    user_id: int | None = None,
 ) -> dict | None:
-    """Return a single analysis by id, or None if not found."""
+    """Return a single analysis by id, or None if not found.
+    When user_id is provided, only return if the analysis belongs to that user."""
     async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            """
-            SELECT id, aws_region, resources_scanned, issues_found,
-                   estimated_savings, analysis_result, status, created_at
-            FROM analyses
-            WHERE id = $1
-            """,
-            analysis_id,
-        )
+        if user_id is not None:
+            row = await conn.fetchrow(
+                """
+                SELECT id, aws_region, resources_scanned, issues_found,
+                       estimated_savings, analysis_result, status, created_at
+                FROM analyses
+                WHERE id = $1 AND user_id = $2
+                """,
+                analysis_id,
+                user_id,
+            )
+        else:
+            row = await conn.fetchrow(
+                """
+                SELECT id, aws_region, resources_scanned, issues_found,
+                       estimated_savings, analysis_result, status, created_at
+                FROM analyses
+                WHERE id = $1
+                """,
+                analysis_id,
+            )
 
     if row is None:
         return None

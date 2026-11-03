@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import api from "../api/client";
 import ProgressTracker from "../components/ProgressTracker";
 import type { AnalyzeResponse, ProgressMessage, RegionInfo } from "../types";
@@ -14,7 +14,10 @@ export default function Dashboard() {
     []
   );
   const [currentPercent, setCurrentPercent] = useState(-1);
-  const [analysisRunning, setAnalysisRunning] = useState(false);
+  const [completedAnalysisId, setCompletedAnalysisId] = useState<number | null>(
+    null
+  );
+  const analysisRunningRef = useRef(false);
 
   useEffect(() => {
     api
@@ -28,6 +31,11 @@ export default function Dashboard() {
       .catch(() => setError("Failed to load regions"));
   }, []);
 
+  function stopAnalysis() {
+    analysisRunningRef.current = false;
+    setLoading(false);
+  }
+
   async function handleAnalyze() {
     if (!selectedRegion) return;
 
@@ -35,62 +43,67 @@ export default function Dashboard() {
     setLoading(true);
     setProgressMessages([]);
     setCurrentPercent(0);
-    setAnalysisRunning(true);
+    setCompletedAnalysisId(null);
+    analysisRunningRef.current = true;
+
+    let analysisId: number;
 
     try {
       const { data } = await api.post<AnalyzeResponse>("/analyze", {
         region: selectedRegion,
       });
-
-      const analysisId = data.analysis_id;
-
-      // Connect to WebSocket for live progress
-      const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-      const ws = new WebSocket(
-        `${wsProtocol}//${window.location.host}/ws/progress/${analysisId}`
-      );
-
-      ws.onmessage = (event) => {
-        const msg: ProgressMessage = JSON.parse(event.data);
-        setProgressMessages((prev) => [...prev, msg]);
-        setCurrentPercent(msg.percent);
-
-        if (msg.percent === 100) {
-          ws.close();
-          setAnalysisRunning(false);
-          setLoading(false);
-          // Navigate to report after a brief delay
-          setTimeout(() => navigate(`/report/${analysisId}`), 1000);
-        } else if (msg.percent === -1) {
-          ws.close();
-          setAnalysisRunning(false);
-          setLoading(false);
-          setError(msg.step);
-        }
-      };
-
-      ws.onerror = () => {
-        setError("WebSocket connection failed");
-        setAnalysisRunning(false);
-        setLoading(false);
-      };
-
-      ws.onclose = () => {
-        if (analysisRunning) {
-          setAnalysisRunning(false);
-          setLoading(false);
-        }
-      };
+      analysisId = data.analysis_id;
     } catch (err: unknown) {
       if (err && typeof err === "object" && "response" in err) {
         const axiosErr = err as { response?: { data?: { detail?: string } } };
-        setError(axiosErr.response?.data?.detail || "Analysis failed to start");
+        setError(
+          axiosErr.response?.data?.detail || "Analysis failed to start"
+        );
       } else {
         setError("Network error. Please try again.");
       }
-      setAnalysisRunning(false);
-      setLoading(false);
+      stopAnalysis();
+      return;
     }
+
+    // Connect to WebSocket for live progress, passing JWT as query param
+    const token = localStorage.getItem("token") || "";
+    const wsProtocol =
+      window.location.protocol === "https:" ? "wss:" : "ws:";
+    const ws = new WebSocket(
+      `${wsProtocol}//${window.location.host}/ws/progress/${analysisId}?token=${encodeURIComponent(token)}`
+    );
+
+    ws.onmessage = (event) => {
+      const msg: ProgressMessage = JSON.parse(event.data);
+      setProgressMessages((prev) => [...prev, msg]);
+      setCurrentPercent(msg.percent);
+
+      if (msg.percent === 100) {
+        ws.close();
+        stopAnalysis();
+        setTimeout(() => navigate(`/report/${analysisId}`), 1000);
+      } else if (msg.percent === -1) {
+        ws.close();
+        stopAnalysis();
+        setError(msg.step);
+      }
+    };
+
+    ws.onerror = () => {
+      setError(
+        "Live progress connection failed. Your analysis is still running."
+      );
+      setCompletedAnalysisId(analysisId);
+      stopAnalysis();
+    };
+
+    ws.onclose = () => {
+      if (analysisRunningRef.current) {
+        setCompletedAnalysisId(analysisId);
+        stopAnalysis();
+      }
+    };
   }
 
   return (
@@ -103,6 +116,23 @@ export default function Dashboard() {
       {error && (
         <div className="bg-red-900/30 border border-red-800 text-red-300 text-sm rounded px-4 py-3 mb-6">
           {error}
+        </div>
+      )}
+
+      {completedAnalysisId && (
+        <div className="bg-blue-900/30 border border-blue-800 text-blue-300 text-sm rounded px-4 py-3 mb-6">
+          Analysis #{completedAnalysisId} may still be running.{" "}
+          <Link
+            to={`/report/${completedAnalysisId}`}
+            className="underline hover:text-blue-200"
+          >
+            Check the report
+          </Link>{" "}
+          or visit{" "}
+          <Link to="/history" className="underline hover:text-blue-200">
+            History
+          </Link>
+          .
         </div>
       )}
 
