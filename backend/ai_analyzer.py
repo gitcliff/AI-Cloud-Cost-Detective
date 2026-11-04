@@ -1,11 +1,23 @@
+import asyncio
 import json
 import logging
 import os
 
-from openai import AsyncOpenAI, APIConnectionError, RateLimitError, APIStatusError
-
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Supported providers and their default models
+# ---------------------------------------------------------------------------
+PROVIDER_DEFAULTS = {
+    "groq":      "openai/gpt-oss-120b",
+    "openai":    "gpt-4o-mini",
+    "anthropic": "claude-3-5-haiku-20241022",
+    "gemini":    "gemini-2.5-flash",
+}
+
+# ---------------------------------------------------------------------------
+# Prompts
+# ---------------------------------------------------------------------------
 SYSTEM_PROMPT = """\
 You are an AWS cost optimization expert. You analyze AWS resource inventories \
 and identify cost inefficiencies. You respond ONLY with valid JSON matching the \
@@ -77,53 +89,119 @@ If no issues are found, return an empty issues array with an appropriate summary
 Do NOT wrap the JSON in markdown code fences. Return raw JSON only.\
 """
 
-# Maximum characters of serialized resources to send to OpenAI.
-# GPT-4o supports ~128k tokens; we stay well under to leave room for response.
 MAX_RESOURCE_PAYLOAD_CHARS = 60_000
 
 
-def _prepare_resources_payload(resources: dict[str, list[dict]]) -> str:
-    """Serialize resources to JSON, trimming if necessary to stay within token budget."""
-    # Strip down to essentials — remove verbose fields per service
-    trimmed = {}
-    for service, items in resources.items():
-        if not items:
-            continue
-        trimmed[service] = items
+# ---------------------------------------------------------------------------
+# Provider adapters — each returns raw JSON text
+# ---------------------------------------------------------------------------
 
+async def _complete_groq(system: str, user: str, api_key: str, model: str) -> str:
+    try:
+        from groq import AsyncGroq
+    except ImportError:
+        raise RuntimeError("groq package not installed. Run: pip install groq")
+
+    client = AsyncGroq(api_key=api_key)
+    response = await client.chat.completions.create(
+        model=model,
+        messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+        temperature=0.2,
+        max_tokens=4096,
+        response_format={"type": "json_object"},
+    )
+    return response.choices[0].message.content
+
+
+async def _complete_openai(system: str, user: str, api_key: str, model: str) -> str:
+    try:
+        from openai import AsyncOpenAI
+    except ImportError:
+        raise RuntimeError("openai package not installed. Run: pip install openai")
+
+    client = AsyncOpenAI(api_key=api_key)
+    response = await client.chat.completions.create(
+        model=model,
+        messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+        temperature=0.2,
+        max_tokens=4096,
+        response_format={"type": "json_object"},
+    )
+    return response.choices[0].message.content
+
+
+async def _complete_anthropic(system: str, user: str, api_key: str, model: str) -> str:
+    try:
+        import anthropic
+    except ImportError:
+        raise RuntimeError("anthropic package not installed. Run: pip install anthropic")
+
+    client = anthropic.AsyncAnthropic(api_key=api_key)
+    response = await client.messages.create(
+        model=model,
+        system=system,
+        messages=[{"role": "user", "content": user}],
+        temperature=0.2,
+        max_tokens=4096,
+    )
+    return response.content[0].text
+
+
+async def _complete_gemini(system: str, user: str, api_key: str, model: str) -> str:
+    try:
+        import google.generativeai as genai
+    except ImportError:
+        raise RuntimeError("google-generativeai package not installed. Run: pip install google-generativeai")
+
+    genai.configure(api_key=api_key)
+    llm = genai.GenerativeModel(
+        model_name=model,
+        system_instruction=system,
+        generation_config=genai.types.GenerationConfig(
+            temperature=0.2,
+            max_output_tokens=4096,
+            response_mime_type="application/json",
+        ),
+    )
+    response = await llm.generate_content_async(user)
+    return response.text
+
+
+PROVIDER_ADAPTERS = {
+    "groq":      _complete_groq,
+    "openai":    _complete_openai,
+    "anthropic": _complete_anthropic,
+    "gemini":    _complete_gemini,
+}
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _prepare_resources_payload(resources: dict[str, list[dict]]) -> str:
+    trimmed = {svc: items for svc, items in resources.items() if items}
     payload = json.dumps(trimmed, indent=2, default=str)
 
     if len(payload) <= MAX_RESOURCE_PAYLOAD_CHARS:
         return payload
 
-    # If too large, reduce by capping per-service item counts
     caps = {
-        "ec2_instances": 80,
-        "rds_instances": 40,
-        "s3_buckets": 40,
-        "ebs_volumes": 60,
-        "elastic_ips": 30,
-        "load_balancers": 30,
-        "lambda_functions": 40,
-        "nat_gateways": 20,
+        "ec2_instances": 80, "rds_instances": 40, "s3_buckets": 40,
+        "ebs_volumes": 60, "elastic_ips": 30, "load_balancers": 30,
+        "lambda_functions": 40, "nat_gateways": 20,
     }
-    for service, items in trimmed.items():
-        cap = caps.get(service, 30)
+    for svc, items in trimmed.items():
+        cap = caps.get(svc, 30)
         if len(items) > cap:
-            trimmed[service] = items[:cap]
+            trimmed[svc] = items[:cap]
 
     payload = json.dumps(trimmed, indent=2, default=str)
-    logger.info(
-        "Resource payload trimmed to %d chars (%d services)",
-        len(payload),
-        len(trimmed),
-    )
+    logger.info("Resource payload trimmed to %d chars (%d services)", len(payload), len(trimmed))
     return payload
 
 
 def _parse_response(raw_text: str, region: str, total_resources: int) -> dict:
-    """Parse the OpenAI response text into a validated analysis dict."""
-    # Strip markdown fences if the model wraps them despite instructions
     text = raw_text.strip()
     if text.startswith("```"):
         first_newline = text.index("\n")
@@ -131,20 +209,19 @@ def _parse_response(raw_text: str, region: str, total_resources: int) -> dict:
         text = text[first_newline + 1 : last_fence].strip()
 
     data = json.loads(text)
-
-    issues = []
-    for item in data.get("issues", []):
-        issues.append({
-            "resource_id": item.get("resource_id", ""),
-            "resource_type": item.get("resource_type", ""),
-            "resource_name": item.get("resource_name", ""),
-            "issue_type": item.get("issue_type", ""),
-            "severity": item.get("severity", "low"),
-            "explanation": item.get("explanation", ""),
+    issues = [
+        {
+            "resource_id":               item.get("resource_id", ""),
+            "resource_type":             item.get("resource_type", ""),
+            "resource_name":             item.get("resource_name", ""),
+            "issue_type":                item.get("issue_type", ""),
+            "severity":                  item.get("severity", "low"),
+            "explanation":               item.get("explanation", ""),
             "estimated_monthly_savings": item.get("estimated_monthly_savings", "$0"),
-            "fix_command": item.get("fix_command", ""),
-        })
-
+            "fix_command":               item.get("fix_command", ""),
+        }
+        for item in data.get("issues", [])
+    ]
     return {
         "region": region,
         "resources_scanned": total_resources,
@@ -155,26 +232,31 @@ def _parse_response(raw_text: str, region: str, total_resources: int) -> dict:
     }
 
 
-async def analyze_aws_resources(
-    region: str,
-    resources: dict[str, list[dict]],
-) -> dict:
-    """Send scanned AWS resources to OpenAI GPT-4o for cost analysis.
+# ---------------------------------------------------------------------------
+# Public entry point
+# ---------------------------------------------------------------------------
 
-    Returns a dict matching the AnalysisResult schema (minus analysis_id
-    and created_at, which are added by the caller / database layer).
+async def analyze_aws_resources(region: str, resources: dict[str, list[dict]]) -> dict:
+    """Analyze scanned AWS resources using the configured LLM provider.
+
+    Provider is selected via LLM_PROVIDER env var (groq | openai | anthropic | gemini).
+    API key is read from LLM_API_KEY. Model can be overridden with LLM_MODEL.
 
     Raises:
-        RuntimeError: If the OpenAI API call fails after exhausting retries.
+        RuntimeError: If configuration is missing or the API call fails.
     """
-    api_key = os.getenv("OPENAI_API_KEY")
+    provider = os.getenv("LLM_PROVIDER", "groq").lower()
+    api_key = os.getenv("LLM_API_KEY")
+    model = os.getenv("LLM_MODEL") or PROVIDER_DEFAULTS.get(provider)
+
+    if provider not in PROVIDER_ADAPTERS:
+        supported = ", ".join(PROVIDER_ADAPTERS)
+        raise RuntimeError(f"Unknown LLM_PROVIDER '{provider}'. Supported: {supported}")
+
     if not api_key:
-        raise RuntimeError(
-            "OPENAI_API_KEY not set. Add it to your .env file."
-        )
+        raise RuntimeError("LLM_API_KEY not set. Add it to your .env file.")
 
     total_resources = sum(len(v) for v in resources.values())
-
     if total_resources == 0:
         return {
             "region": region,
@@ -186,42 +268,27 @@ async def analyze_aws_resources(
         }
 
     resources_json = _prepare_resources_payload(resources)
-    user_prompt = USER_PROMPT_TEMPLATE.format(
-        region=region,
-        resources_json=resources_json,
-    )
+    user_prompt = USER_PROMPT_TEMPLATE.format(region=region, resources_json=resources_json)
+    adapter = PROVIDER_ADAPTERS[provider]
 
-    client = AsyncOpenAI(api_key=api_key)
+    logger.info("Running AI analysis via provider=%s model=%s", provider, model)
 
     try:
-        response = await client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=0.2,
-            max_tokens=4096,
-            response_format={"type": "json_object"},
+        raw_text = await asyncio.wait_for(
+            adapter(SYSTEM_PROMPT, user_prompt, api_key, model),
+            timeout=120,
         )
-    except APIConnectionError as e:
-        logger.error("OpenAI connection error: %s", e)
-        raise RuntimeError("Failed to connect to OpenAI API. Check your network.") from e
-    except RateLimitError as e:
-        logger.error("OpenAI rate limit: %s", e)
-        raise RuntimeError("OpenAI rate limit exceeded. Try again shortly.") from e
-    except APIStatusError as e:
-        logger.error("OpenAI API error %d: %s", e.status_code, e.message)
-        raise RuntimeError(f"OpenAI API error: {e.message}") from e
+    except asyncio.TimeoutError:
+        raise RuntimeError(f"{provider} API call timed out after 120s. Try again shortly.")
+    except Exception as e:
+        logger.error("%s API error: %s", provider, e)
+        raise RuntimeError(f"{provider} API error: {e}") from e
 
-    raw_text = response.choices[0].message.content
     if not raw_text:
-        raise RuntimeError("OpenAI returned an empty response.")
+        raise RuntimeError(f"{provider} returned an empty response.")
 
     try:
         return _parse_response(raw_text, region, total_resources)
     except (json.JSONDecodeError, KeyError, IndexError) as e:
-        logger.error("Failed to parse OpenAI response: %s\nRaw: %s", e, raw_text[:500])
-        raise RuntimeError(
-            "OpenAI returned an invalid response. Try running the analysis again."
-        ) from e
+        logger.error("Failed to parse %s response: %s\nRaw: %s", provider, e, raw_text[:500])
+        raise RuntimeError(f"{provider} returned an invalid response. Try running the analysis again.") from e
