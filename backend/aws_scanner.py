@@ -139,12 +139,14 @@ def scan_ebs(session: boto3.Session) -> list[dict]:
         volumes = []
         for page in paginator.paginate():
             for vol in page["Volumes"]:
+                attachments = vol.get("Attachments", [])
                 volumes.append({
                     "volume_id": vol["VolumeId"],
                     "volume_type": vol["VolumeType"],
                     "size_gb": vol["Size"],
                     "state": vol["State"],
-                    "attached": len(vol.get("Attachments", [])) > 0,
+                    "attached": len(attachments) > 0,
+                    "attached_instance_id": attachments[0]["InstanceId"] if attachments else None,
                     "encrypted": vol.get("Encrypted", False),
                     "iops": vol.get("Iops"),
                     "name": _get_name_tag(vol.get("Tags")),

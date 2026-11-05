@@ -12,6 +12,7 @@ from ai_analyzer import analyze_aws_resources
 from auth import get_current_user, hash_password, verify_password, create_token, decode_token_raw
 from aws_scanner import get_regions, scan_region
 from cost_explorer import fetch_cost_data, merge_costs_with_resources
+from pricing_engine import detect_and_price_issues
 from db import (
     create_pool, create_tables, create_pending_analysis, update_analysis,
     get_history, get_analysis_by_id, get_user_by_email, create_user,
@@ -129,9 +130,15 @@ async def _run_analysis(analysis_id: int, region: str, include_cost_data: bool =
 
         await _push_progress(analysis_id, "Scanning complete", 60)
 
-        # Send resources + cost data to LLM for analysis
+        # Run deterministic pricing engine to pre-calculate savings
+        await _push_progress(analysis_id, "Calculating savings from pricing data...", 63)
+        precalculated_issues = await loop.run_in_executor(
+            None, detect_and_price_issues, resources, region,
+        )
+
+        # Send resources + pre-calculated issues to LLM for explanation
         await _push_progress(analysis_id, "Analyzing costs with AI...", 70)
-        result = await analyze_aws_resources(region, resources, cost_data)
+        result = await analyze_aws_resources(region, resources, cost_data, precalculated_issues)
 
         # Step 6 — Store results in PostgreSQL
         await _push_progress(analysis_id, "Storing results...", 90)

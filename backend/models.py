@@ -40,6 +40,10 @@ class Issue(BaseModel):
     estimated_monthly_savings: str
     fix_command: str
     actual_monthly_cost: str | None = None
+    confidence: str = "low"
+    calculation_method: str = "llm_estimated"
+    assumptions: list[str] = []
+    savings_formula: str | None = None
 
 
 class AnalysisResult(BaseModel):

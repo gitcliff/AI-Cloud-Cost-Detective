@@ -22,6 +22,10 @@ export interface Issue {
   estimated_monthly_savings: string;
   fix_command: string;
   actual_monthly_cost?: string | null;
+  confidence?: "high" | "medium" | "low";
+  calculation_method?: "deterministic" | "cost_explorer" | "llm_estimated";
+  assumptions?: string[];
+  savings_formula?: string | null;
 }
 
 export interface CostSummary {
