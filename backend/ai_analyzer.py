@@ -23,9 +23,13 @@ You are an AWS cost optimization expert. You analyze AWS resource inventories \
 and identify cost inefficiencies. You respond ONLY with valid JSON matching the \
 schema provided — no markdown fences, no commentary outside the JSON object.
 
-Be specific: include exact resource IDs, concrete cost estimates based on \
-current AWS public pricing, and copy-paste-ready AWS CLI commands that the \
-user can run to fix each issue.\
+Be specific: include exact resource IDs, concrete cost estimates, and \
+copy-paste-ready AWS CLI commands that the user can run to fix each issue.
+
+When actual AWS Cost Explorer data is provided, use those real costs as the \
+basis for your savings estimates rather than guessing from public pricing. \
+Clearly distinguish between resources with known costs and those where cost \
+is estimated.\
 """
 
 USER_PROMPT_TEMPLATE = """\
@@ -51,6 +55,8 @@ monthly spend.
 Resource inventory:
 {resources_json}
 
+{cost_data_section}
+
 Return a JSON object with this exact structure:
 {{
   "summary": "One-paragraph executive summary of findings",
@@ -64,6 +70,7 @@ Return a JSON object with this exact structure:
       "severity": "high | medium | low",
       "explanation": "Clear explanation of the problem and its cost impact",
       "estimated_monthly_savings": "$X",
+      "actual_monthly_cost": "$Y (from Cost Explorer, or null if unavailable)",
       "fix_command": "aws ec2 ... --region {region}"
     }}
   ]
@@ -219,6 +226,7 @@ def _parse_response(raw_text: str, region: str, total_resources: int) -> dict:
             "explanation":               item.get("explanation", ""),
             "estimated_monthly_savings": item.get("estimated_monthly_savings", "$0"),
             "fix_command":               item.get("fix_command", ""),
+            "actual_monthly_cost":       item.get("actual_monthly_cost"),
         }
         for item in data.get("issues", [])
     ]
@@ -236,7 +244,42 @@ def _parse_response(raw_text: str, region: str, total_resources: int) -> dict:
 # Public entry point
 # ---------------------------------------------------------------------------
 
-async def analyze_aws_resources(region: str, resources: dict[str, list[dict]]) -> dict:
+def _build_cost_data_section(cost_data: dict | None) -> str:
+    """Build the cost data prompt section from Cost Explorer data."""
+    if not cost_data or not cost_data.get("available"):
+        return (
+            "Note: AWS Cost Explorer data is not available for this account. "
+            "Base your cost estimates on AWS public pricing. "
+            "Set actual_monthly_cost to null for all issues."
+        )
+
+    total_costs = cost_data.get("total_monthly_cost", [])
+    breakdown = cost_data.get("service_breakdown", {})
+
+    total_str = ", ".join(f'{m["month"]}: ${m["amount"]:,.2f}' for m in total_costs)
+    breakdown_str = "\n".join(f"  - {svc}: ${amt:,.2f}" for svc, amt in sorted(breakdown.items(), key=lambda x: -x[1]))
+
+    lines = [
+        "=== Actual AWS Cost Explorer Data (last 3 months) ===",
+        f"Total monthly spend: {total_str}",
+        f"Service breakdown (most recent month):\n{breakdown_str}",
+        "",
+        'Individual resources in the inventory above include a "cost_info" field with '
+        "their actual monthly costs and trend. Use these real costs for your savings "
+        'estimates. If a resource has "cost_source": "estimated_from_service_total", '
+        "the per-resource cost is an approximation distributed from the service total.",
+        "",
+        "For each issue, set actual_monthly_cost to the resource's current monthly cost "
+        'from Cost Explorer (e.g. "$45.20") or null if not available.',
+    ]
+    return "\n".join(lines)
+
+
+async def analyze_aws_resources(
+    region: str,
+    resources: dict[str, list[dict]],
+    cost_data: dict | None = None,
+) -> dict:
     """Analyze scanned AWS resources using the configured LLM provider.
 
     Provider is selected via LLM_PROVIDER env var (groq | openai | anthropic | gemini).
@@ -268,7 +311,10 @@ async def analyze_aws_resources(region: str, resources: dict[str, list[dict]]) -
         }
 
     resources_json = _prepare_resources_payload(resources)
-    user_prompt = USER_PROMPT_TEMPLATE.format(region=region, resources_json=resources_json)
+    cost_section = _build_cost_data_section(cost_data)
+    user_prompt = USER_PROMPT_TEMPLATE.format(
+        region=region, resources_json=resources_json, cost_data_section=cost_section,
+    )
     adapter = PROVIDER_ADAPTERS[provider]
 
     logger.info("Running AI analysis via provider=%s model=%s", provider, model)
@@ -288,7 +334,28 @@ async def analyze_aws_resources(region: str, resources: dict[str, list[dict]]) -
         raise RuntimeError(f"{provider} returned an empty response.")
 
     try:
-        return _parse_response(raw_text, region, total_resources)
+        result = _parse_response(raw_text, region, total_resources)
     except (json.JSONDecodeError, KeyError, IndexError) as e:
         logger.error("Failed to parse %s response: %s\nRaw: %s", provider, e, raw_text[:500])
         raise RuntimeError(f"{provider} returned an invalid response. Try running the analysis again.") from e
+
+    # Attach cost summary from Cost Explorer data.
+    if cost_data and cost_data.get("available"):
+        totals = cost_data.get("total_monthly_cost", [])
+        current = totals[-1]["amount"] if totals else 0
+        result["cost_summary"] = {
+            "available": True,
+            "total_monthly_cost": totals,
+            "service_breakdown": cost_data.get("service_breakdown", {}),
+        }
+        result["actual_total_monthly_cost"] = f"${current:,.2f}/month"
+    else:
+        result["cost_summary"] = {
+            "available": False,
+            "total_monthly_cost": [],
+            "service_breakdown": {},
+            "error": cost_data.get("error", "Cost Explorer not available") if cost_data else None,
+        }
+        result["actual_total_monthly_cost"] = None
+
+    return result

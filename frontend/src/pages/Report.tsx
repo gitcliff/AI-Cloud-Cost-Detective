@@ -75,9 +75,16 @@ function IssueCard({ issue }: { issue: Issue }) {
             {issue.resource_name || issue.resource_id}
           </p>
         </div>
-        <span className="text-sm font-semibold text-green-400 whitespace-nowrap">
-          {issue.estimated_monthly_savings}
-        </span>
+        <div className="text-right whitespace-nowrap">
+          {issue.actual_monthly_cost && (
+            <p className="text-xs text-gray-400">
+              Cost: {issue.actual_monthly_cost}
+            </p>
+          )}
+          <p className="text-sm font-semibold text-green-400">
+            Save {issue.estimated_monthly_savings}
+          </p>
+        </div>
       </div>
 
       <p className="text-sm text-gray-400 mb-3">{issue.explanation}</p>
@@ -93,6 +100,38 @@ function IssueCard({ issue }: { issue: Issue }) {
           </code>
         </div>
       )}
+    </div>
+  );
+}
+
+function ServiceBreakdown({ breakdown }: { breakdown: Record<string, number> }) {
+  const entries = Object.entries(breakdown).sort(([, a], [, b]) => b - a);
+  if (entries.length === 0) return null;
+  const maxAmount = entries[0][1];
+
+  return (
+    <div className="bg-gray-900 border border-gray-800 rounded-lg p-4 mb-6">
+      <h2 className="text-sm font-medium text-gray-400 mb-3">
+        Cost by Service (Current Month)
+      </h2>
+      <div className="space-y-2">
+        {entries.map(([service, amount]) => (
+          <div key={service}>
+            <div className="flex justify-between text-xs mb-1">
+              <span className="text-gray-300 truncate mr-2">{service}</span>
+              <span className="text-gray-400 whitespace-nowrap">
+                ${amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </span>
+            </div>
+            <div className="w-full bg-gray-800 rounded-full h-1.5">
+              <div
+                className="bg-blue-500 h-1.5 rounded-full"
+                style={{ width: `${maxAmount > 0 ? (amount / maxAmount) * 100 : 0}%` }}
+              />
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -137,8 +176,8 @@ export default function Report() {
         {new Date(result.created_at).toLocaleDateString()}
       </p>
 
-      {/* Summary card */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
+      {/* Summary cards */}
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-4 mb-6">
         <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
           <p className="text-xs text-gray-500 mb-1">Resources Scanned</p>
           <p className="text-xl font-bold">{result.resources_scanned}</p>
@@ -146,6 +185,19 @@ export default function Report() {
         <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
           <p className="text-xs text-gray-500 mb-1">Issues Found</p>
           <p className="text-xl font-bold">{result.issues_found}</p>
+        </div>
+        <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
+          <p className="text-xs text-gray-500 mb-1">Actual Monthly Cost</p>
+          {result.actual_total_monthly_cost ? (
+            <p className="text-xl font-bold text-blue-400">
+              {result.actual_total_monthly_cost}
+            </p>
+          ) : (
+            <p className="text-xl font-bold text-gray-600">N/A</p>
+          )}
+          {result.cost_summary?.available && (
+            <p className="text-[10px] text-gray-600 mt-0.5">via Cost Explorer</p>
+          )}
         </div>
         <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
           <p className="text-xs text-gray-500 mb-1">Est. Savings</p>
@@ -174,6 +226,21 @@ export default function Report() {
           </div>
         </div>
       </div>
+
+      {/* Cost Explorer info banner */}
+      {result.cost_summary && !result.cost_summary.available && (
+        <div className="bg-blue-900/20 border border-blue-800/50 text-blue-300 text-xs rounded px-4 py-2 mb-4">
+          Cost Explorer data was not available for this analysis.
+          {result.cost_summary.error && (
+            <span className="text-blue-400"> ({result.cost_summary.error})</span>
+          )}
+        </div>
+      )}
+
+      {/* Cost by Service breakdown */}
+      {result.cost_summary?.available && result.cost_summary.service_breakdown && (
+        <ServiceBreakdown breakdown={result.cost_summary.service_breakdown} />
+      )}
 
       {/* Summary text */}
       <div className="bg-gray-900 border border-gray-800 rounded-lg p-4 mb-6">

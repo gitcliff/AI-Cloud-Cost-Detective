@@ -23,6 +23,7 @@ class RegionInfo(BaseModel):
 
 class AnalyzeRequest(BaseModel):
     region: str
+    include_cost_data: bool = True
 
 
 class AnalyzeResponse(BaseModel):
@@ -38,6 +39,7 @@ class Issue(BaseModel):
     explanation: str
     estimated_monthly_savings: str
     fix_command: str
+    actual_monthly_cost: str | None = None
 
 
 class AnalysisResult(BaseModel):
@@ -49,6 +51,8 @@ class AnalysisResult(BaseModel):
     summary: str
     issues: list[Issue]
     created_at: str
+    cost_summary: dict | None = None
+    actual_total_monthly_cost: str | None = None
 
 
 class AnalysisSummary(BaseModel):

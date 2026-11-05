@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from ai_analyzer import analyze_aws_resources
 from auth import get_current_user, hash_password, verify_password, create_token, decode_token_raw
 from aws_scanner import get_regions, scan_region
+from cost_explorer import fetch_cost_data, merge_costs_with_resources
 from db import (
     create_pool, create_tables, create_pending_analysis, update_analysis,
     get_history, get_analysis_by_id, get_user_by_email, create_user,
@@ -103,23 +104,34 @@ async def _push_progress(analysis_id: int, step: str, percent: int) -> None:
         await queue.put({"step": step, "percent": percent})
 
 
-async def _run_analysis(analysis_id: int, region: str) -> None:
+async def _run_analysis(analysis_id: int, region: str, include_cost_data: bool = True) -> None:
     """Background task: scan AWS, run AI analysis, store results."""
     pool = app.state.db_pool
 
     try:
         await _push_progress(analysis_id, "Connecting to AWS region...", 5)
 
-        # Step 3 — Scan AWS resources via boto3 (sync, run in executor)
-        await _push_progress(analysis_id, "Scanning EC2 instances...", 15)
+        # Scan AWS resources and fetch cost data in parallel
+        await _push_progress(analysis_id, "Scanning AWS resources...", 15)
         loop = asyncio.get_event_loop()
-        resources = await loop.run_in_executor(None, scan_region, region)
+        scan_future = loop.run_in_executor(None, scan_region, region)
+        if include_cost_data:
+            cost_future = loop.run_in_executor(None, fetch_cost_data, region)
+
+        resources = await scan_future
+        await _push_progress(analysis_id, "Fetching cost data from AWS...", 50)
+        cost_data = (await cost_future) if include_cost_data else {"available": False}
+
+        # Merge cost data into resources if available
+        if cost_data.get("available"):
+            await _push_progress(analysis_id, "Merging cost data...", 55)
+            resources = merge_costs_with_resources(resources, cost_data)
 
         await _push_progress(analysis_id, "Scanning complete", 60)
 
-        # Step 5 — Send resources to OpenAI for cost analysis
+        # Send resources + cost data to LLM for analysis
         await _push_progress(analysis_id, "Analyzing costs with AI...", 70)
-        result = await analyze_aws_resources(region, resources)
+        result = await analyze_aws_resources(region, resources, cost_data)
 
         # Step 6 — Store results in PostgreSQL
         await _push_progress(analysis_id, "Storing results...", 90)
@@ -165,7 +177,7 @@ async def analyze(request: AnalyzeRequest, user_id: int = Depends(get_current_us
     progress_queues[analysis_id] = asyncio.Queue()
 
     # Launch analysis in the background so the endpoint returns immediately
-    asyncio.create_task(_run_analysis(analysis_id, request.region))
+    asyncio.create_task(_run_analysis(analysis_id, request.region, request.include_cost_data))
 
     return AnalyzeResponse(analysis_id=analysis_id)
 

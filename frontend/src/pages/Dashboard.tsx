@@ -8,6 +8,7 @@ export default function Dashboard() {
   const navigate = useNavigate();
   const [regions, setRegions] = useState<RegionInfo[]>([]);
   const [selectedRegion, setSelectedRegion] = useState("");
+  const [includeCostData, setIncludeCostData] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [progressMessages, setProgressMessages] = useState<ProgressMessage[]>(
@@ -51,6 +52,7 @@ export default function Dashboard() {
     try {
       const { data } = await api.post<AnalyzeResponse>("/analyze", {
         region: selectedRegion,
+        include_cost_data: includeCostData,
       });
       analysisId = data.analysis_id;
     } catch (err: unknown) {
@@ -158,6 +160,18 @@ export default function Dashboard() {
               Scans: EC2, RDS, S3, EBS, Elastic IPs, Load Balancers, Lambda,
               NAT Gateways
             </p>
+            <label className="flex items-center gap-2 mt-3 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={includeCostData}
+                onChange={(e) => setIncludeCostData(e.target.checked)}
+                disabled={loading}
+                className="rounded border-gray-600 bg-gray-800 text-blue-600 focus:ring-blue-500"
+              />
+              <span className="text-xs text-gray-400">
+                Include Cost Explorer data (actual spend)
+              </span>
+            </label>
           </div>
 
           <button
