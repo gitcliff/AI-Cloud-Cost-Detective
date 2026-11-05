@@ -13,7 +13,7 @@ export default function Navbar() {
     <nav className="border-b border-gray-800 bg-gray-900">
       <div className="max-w-6xl mx-auto px-4 flex items-center justify-between h-14">
         <Link to="/" className="text-lg font-semibold text-white">
-          Cloud Cost Detective
+          AWS Cloud Cost Detective
         </Link>
         <div className="flex items-center gap-6">
           <Link

@@ -35,7 +35,7 @@ export default function Login() {
     <div className="min-h-screen flex items-center justify-center bg-gray-950">
       <div className="w-full max-w-sm">
         <h1 className="text-2xl font-bold text-center mb-2">
-          Cloud Cost Detective
+          AWS Cloud Cost Detective
         </h1>
         <p className="text-gray-500 text-center text-sm mb-8">
           Sign in to your account
