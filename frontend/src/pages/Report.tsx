@@ -31,6 +31,40 @@ function issueTypeLabel(type: string) {
   }
 }
 
+function confidenceBadge(confidence?: string, method?: string) {
+  if (!confidence) {
+    return (
+      <span className="px-1.5 py-0.5 rounded text-[10px] bg-gray-800 text-gray-400">
+        Legacy
+      </span>
+    );
+  }
+  switch (confidence) {
+    case "high":
+      return (
+        <span className="px-1.5 py-0.5 rounded text-[10px] bg-green-900 text-green-300">
+          Verified
+        </span>
+      );
+    case "medium":
+      return (
+        <span className="px-1.5 py-0.5 rounded text-[10px] bg-yellow-900 text-yellow-300">
+          Estimated
+        </span>
+      );
+    case "low":
+    default:
+      return (
+        <span
+          className="px-1.5 py-0.5 rounded text-[10px] bg-gray-700 text-gray-300"
+          title={method === "llm_estimated" ? "Savings estimated by AI" : undefined}
+        >
+          AI Estimate
+        </span>
+      );
+  }
+}
+
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
 
@@ -52,6 +86,11 @@ function CopyButton({ text }: { text: string }) {
 }
 
 function IssueCard({ issue }: { issue: Issue }) {
+  const [showDetails, setShowDetails] = useState(false);
+  const hasDetails =
+    issue.savings_formula ||
+    (issue.assumptions && issue.assumptions.length > 0);
+
   return (
     <div className="border border-gray-800 rounded-lg p-4 bg-gray-900">
       <div className="flex items-start justify-between gap-3 mb-3">
@@ -81,13 +120,66 @@ function IssueCard({ issue }: { issue: Issue }) {
               Cost: {issue.actual_monthly_cost}
             </p>
           )}
-          <p className="text-sm font-semibold text-green-400">
-            Save {issue.estimated_monthly_savings}
-          </p>
+          <div className="flex items-center gap-1.5 justify-end">
+            <p className="text-sm font-semibold text-green-400">
+              Save {issue.estimated_monthly_savings}
+            </p>
+            {confidenceBadge(issue.confidence, issue.calculation_method)}
+          </div>
         </div>
       </div>
 
       <p className="text-sm text-gray-400 mb-3">{issue.explanation}</p>
+
+      {hasDetails && (
+        <button
+          onClick={() => setShowDetails(!showDetails)}
+          className="text-xs text-blue-400 hover:text-blue-300 mb-2 transition-colors"
+        >
+          {showDetails ? "Hide details" : "Show calculation details"}
+        </button>
+      )}
+
+      {showDetails && (
+        <div className="bg-gray-950 border border-gray-800 rounded p-3 mb-3 space-y-2">
+          {issue.savings_formula && (
+            <div>
+              <span className="text-[10px] text-gray-500 uppercase tracking-wide">
+                Formula
+              </span>
+              <p className="text-xs text-gray-300 font-mono">
+                {issue.savings_formula}
+              </p>
+            </div>
+          )}
+          {issue.assumptions && issue.assumptions.length > 0 && (
+            <div>
+              <span className="text-[10px] text-gray-500 uppercase tracking-wide">
+                Assumptions
+              </span>
+              <ul className="text-xs text-gray-400 list-disc list-inside mt-0.5">
+                {issue.assumptions.map((a, i) => (
+                  <li key={i}>{a}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {issue.calculation_method && (
+            <div>
+              <span className="text-[10px] text-gray-500 uppercase tracking-wide">
+                Method
+              </span>
+              <p className="text-xs text-gray-400">
+                {issue.calculation_method === "deterministic"
+                  ? "Deterministic (AWS pricing formula)"
+                  : issue.calculation_method === "cost_explorer"
+                  ? "Based on actual AWS Cost Explorer data"
+                  : "AI estimate based on public pricing"}
+              </p>
+            </div>
+          )}
+        </div>
+      )}
 
       {issue.fix_command && (
         <div className="bg-gray-950 border border-gray-800 rounded p-3">
@@ -168,6 +260,24 @@ export default function Report() {
   const medCount = result.issues.filter((i) => i.severity === "medium").length;
   const lowCount = result.issues.filter((i) => i.severity === "low").length;
 
+  // Split savings by confidence
+  const verifiedSavings = result.issues
+    .filter((i) => i.confidence === "high" || i.confidence === "medium")
+    .reduce((sum, i) => {
+      const val = parseFloat(
+        (i.estimated_monthly_savings || "$0").replace(/[$,/mo]/g, "")
+      );
+      return sum + (isNaN(val) ? 0 : val);
+    }, 0);
+  const aiEstimatedSavings = result.issues
+    .filter((i) => !i.confidence || i.confidence === "low")
+    .reduce((sum, i) => {
+      const val = parseFloat(
+        (i.estimated_monthly_savings || "$0").replace(/[$,/mo]/g, "")
+      );
+      return sum + (isNaN(val) ? 0 : val);
+    }, 0);
+
   return (
     <div>
       <h1 className="text-2xl font-bold mb-1">Analysis Report</h1>
@@ -200,31 +310,46 @@ export default function Report() {
           )}
         </div>
         <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
-          <p className="text-xs text-gray-500 mb-1">Est. Savings</p>
+          <p className="text-xs text-gray-500 mb-1">Verified Savings</p>
           <p className="text-xl font-bold text-green-400">
-            {result.estimated_total_savings}
+            ${verifiedSavings.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}/mo
           </p>
+          <p className="text-[10px] text-gray-600 mt-0.5">high + medium confidence</p>
         </div>
         <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
-          <p className="text-xs text-gray-500 mb-1">Severity</p>
-          <div className="flex gap-2 mt-1">
-            {highCount > 0 && (
-              <span className="px-2 py-0.5 rounded text-xs bg-red-900 text-red-200">
-                {highCount} High
-              </span>
-            )}
-            {medCount > 0 && (
-              <span className="px-2 py-0.5 rounded text-xs bg-amber-900 text-amber-200">
-                {medCount} Med
-              </span>
-            )}
-            {lowCount > 0 && (
-              <span className="px-2 py-0.5 rounded text-xs bg-emerald-900 text-emerald-200">
-                {lowCount} Low
-              </span>
-            )}
-          </div>
+          <p className="text-xs text-gray-500 mb-1">AI Estimated Savings</p>
+          {aiEstimatedSavings > 0 ? (
+            <p className="text-xl font-bold text-gray-400">
+              ${aiEstimatedSavings.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}/mo
+            </p>
+          ) : (
+            <p className="text-xl font-bold text-gray-600">$0.00/mo</p>
+          )}
+          <p className="text-[10px] text-gray-600 mt-0.5">low confidence</p>
         </div>
+      </div>
+
+      {/* Severity + total row */}
+      <div className="flex items-center gap-4 mb-6 text-sm">
+        <span className="text-gray-500">Severity:</span>
+        {highCount > 0 && (
+          <span className="px-2 py-0.5 rounded text-xs bg-red-900 text-red-200">
+            {highCount} High
+          </span>
+        )}
+        {medCount > 0 && (
+          <span className="px-2 py-0.5 rounded text-xs bg-amber-900 text-amber-200">
+            {medCount} Med
+          </span>
+        )}
+        {lowCount > 0 && (
+          <span className="px-2 py-0.5 rounded text-xs bg-emerald-900 text-emerald-200">
+            {lowCount} Low
+          </span>
+        )}
+        <span className="ml-auto text-gray-500">
+          Total: <span className="text-green-400 font-semibold">{result.estimated_total_savings}</span>
+        </span>
       </div>
 
       {/* Cost Explorer info banner */}
