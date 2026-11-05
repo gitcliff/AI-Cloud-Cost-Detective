@@ -21,6 +21,14 @@ export interface Issue {
   explanation: string;
   estimated_monthly_savings: string;
   fix_command: string;
+  actual_monthly_cost?: string | null;
+}
+
+export interface CostSummary {
+  available: boolean;
+  total_monthly_cost: { month: string; amount: number }[];
+  service_breakdown: Record<string, number>;
+  error?: string | null;
 }
 
 export interface AnalysisResult {
@@ -32,6 +40,8 @@ export interface AnalysisResult {
   summary: string;
   issues: Issue[];
   created_at: string;
+  cost_summary?: CostSummary | null;
+  actual_total_monthly_cost?: string | null;
 }
 
 export interface AnalysisSummary {
