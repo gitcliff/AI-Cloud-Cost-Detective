@@ -2,7 +2,7 @@
 
 import copy
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import boto3
 from botocore.exceptions import ClientError, NoCredentialsError
@@ -37,7 +37,7 @@ RESOURCE_ID_FIELD = {
 def _month_periods(months: int = 3) -> tuple[str, str]:
     """Return (start, end) date strings spanning the last *months* full months
     plus the current partial month."""
-    today = datetime.now(timezone.utc).date()
+    today = datetime.now(UTC).date()
     start = (today.replace(day=1) - timedelta(days=months * 30)).replace(day=1)
     # End is the first day of the next month (exclusive upper bound for CE API).
     if today.month == 12:
@@ -214,10 +214,7 @@ def merge_costs_with_resources(resources: dict, cost_data: dict) -> dict:
 
             # Fallback: distribute service-level cost evenly.
             if svc_months and len(items) > 0:
-                distributed = [
-                    {"month": m["month"], "amount": round(m["amount"] / len(items), 2)}
-                    for m in svc_months
-                ]
+                distributed = [{"month": m["month"], "amount": round(m["amount"] / len(items), 2)} for m in svc_months]
                 current = distributed[-1]["amount"] if distributed else 0
                 trend, trend_pct = _compute_trend(distributed)
                 item["cost_info"] = {

@@ -74,6 +74,7 @@ REGION_DISPLAY_NAMES: dict[str, str] = {
 # SavingsEstimate
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class SavingsEstimate:
     monthly_savings: float
@@ -87,6 +88,7 @@ class SavingsEstimate:
 # ---------------------------------------------------------------------------
 # PricingProvider — fetches prices from AWS Pricing API with hardcoded fallback
 # ---------------------------------------------------------------------------
+
 
 class PricingProvider:
     """Fetch and cache AWS pricing data for a specific region."""
@@ -119,6 +121,7 @@ class PricingProvider:
 
         try:
             import json as _json
+
             resp = client.get_products(
                 ServiceCode=service_code,
                 Filters=filters,
@@ -150,14 +153,17 @@ class PricingProvider:
         }
         operating_system = os_map.get(platform, "Linux")
 
-        price = self._api_lookup("AmazonEC2", [
-            {"Type": "TERM_MATCH", "Field": "instanceType", "Value": instance_type},
-            {"Type": "TERM_MATCH", "Field": "location", "Value": self.region_display},
-            {"Type": "TERM_MATCH", "Field": "operatingSystem", "Value": operating_system},
-            {"Type": "TERM_MATCH", "Field": "tenancy", "Value": "Shared"},
-            {"Type": "TERM_MATCH", "Field": "preInstalledSw", "Value": "NA"},
-            {"Type": "TERM_MATCH", "Field": "capacitystatus", "Value": "Used"},
-        ])
+        price = self._api_lookup(
+            "AmazonEC2",
+            [
+                {"Type": "TERM_MATCH", "Field": "instanceType", "Value": instance_type},
+                {"Type": "TERM_MATCH", "Field": "location", "Value": self.region_display},
+                {"Type": "TERM_MATCH", "Field": "operatingSystem", "Value": operating_system},
+                {"Type": "TERM_MATCH", "Field": "tenancy", "Value": "Shared"},
+                {"Type": "TERM_MATCH", "Field": "preInstalledSw", "Value": "NA"},
+                {"Type": "TERM_MATCH", "Field": "capacitystatus", "Value": "Used"},
+            ],
+        )
         return price
 
     def get_ebs_price_per_gb(self, volume_type: str) -> float:
@@ -179,12 +185,15 @@ class PricingProvider:
         db_engine = engine_map.get(engine, engine)
         deployment = "Multi-AZ" if multi_az else "Single-AZ"
 
-        price = self._api_lookup("AmazonRDS", [
-            {"Type": "TERM_MATCH", "Field": "instanceType", "Value": instance_class},
-            {"Type": "TERM_MATCH", "Field": "location", "Value": self.region_display},
-            {"Type": "TERM_MATCH", "Field": "databaseEngine", "Value": db_engine},
-            {"Type": "TERM_MATCH", "Field": "deploymentOption", "Value": deployment},
-        ])
+        price = self._api_lookup(
+            "AmazonRDS",
+            [
+                {"Type": "TERM_MATCH", "Field": "instanceType", "Value": instance_class},
+                {"Type": "TERM_MATCH", "Field": "location", "Value": self.region_display},
+                {"Type": "TERM_MATCH", "Field": "databaseEngine", "Value": db_engine},
+                {"Type": "TERM_MATCH", "Field": "deploymentOption", "Value": deployment},
+            ],
+        )
         return price
 
     def get_elb_hourly_price(self, lb_type: str) -> float:
@@ -196,6 +205,7 @@ class PricingProvider:
 # ---------------------------------------------------------------------------
 # Helper utilities
 # ---------------------------------------------------------------------------
+
 
 def _instance_family(instance_type: str) -> str:
     """Extract family prefix: 't2.micro' -> 't2'."""
@@ -237,7 +247,9 @@ def _build_issue(
         "resource_name": resource_name or resource.get("name", ""),
         "issue_type": issue_type,
         "estimated_monthly_savings": _format_dollars(estimate.monthly_savings),
-        "actual_monthly_cost": _format_dollars(estimate.current_monthly_cost) if estimate.current_monthly_cost else None,
+        "actual_monthly_cost": (
+            _format_dollars(estimate.current_monthly_cost) if estimate.current_monthly_cost else None
+        ),
         "confidence": estimate.confidence,
         "calculation_method": estimate.calculation_method,
         "assumptions": estimate.assumptions,
@@ -252,6 +264,7 @@ def _build_issue(
 # ---------------------------------------------------------------------------
 # Per-issue-type calculators
 # ---------------------------------------------------------------------------
+
 
 def _get_cost_explorer_cost(resource: dict) -> float | None:
     """Extract current monthly cost from Cost Explorer enrichment, if available."""
@@ -446,7 +459,10 @@ def calc_old_gen_instance(instance: dict, pricing: PricingProvider) -> SavingsEs
                 "No special hardware requirements tied to old generation",
             ],
             current_monthly_cost=round(old_price * HOURS_PER_MONTH, 2),
-            formula=f"({instance_type} ${old_price}/hr - {new_type} ${new_price}/hr) x {HOURS_PER_MONTH} hrs = ${savings:,.2f}/mo",
+            formula=(
+                f"({instance_type} ${old_price}/hr - {new_type} ${new_price}/hr)"
+                f" x {HOURS_PER_MONTH} hrs = ${savings:,.2f}/mo"
+            ),
         )
 
     # Pricing API unavailable — use Cost Explorer if we have it
@@ -511,7 +527,10 @@ def calc_multi_az_rds(rds: dict, pricing: PricingProvider) -> SavingsEstimate:
                 "This is a non-production or non-critical database",
             ],
             current_monthly_cost=round(multi_az_price * HOURS_PER_MONTH, 2),
-            formula=f"({instance_class} Multi-AZ ${multi_az_price}/hr - Single-AZ ${single_az_price}/hr) x {HOURS_PER_MONTH} hrs = ${savings:,.2f}/mo",
+            formula=(
+                f"({instance_class} Multi-AZ ${multi_az_price}/hr - Single-AZ ${single_az_price}/hr)"
+                f" x {HOURS_PER_MONTH} hrs = ${savings:,.2f}/mo"
+            ),
         )
 
     return SavingsEstimate(
@@ -529,6 +548,7 @@ def calc_multi_az_rds(rds: dict, pricing: PricingProvider) -> SavingsEstimate:
 # ---------------------------------------------------------------------------
 # Orchestrator
 # ---------------------------------------------------------------------------
+
 
 def detect_and_price_issues(resources: dict, region: str) -> list[dict]:
     """Run all deterministic issue detectors across scanned resources.
@@ -555,10 +575,16 @@ def detect_and_price_issues(resources: dict, region: str) -> list[dict]:
     for eip in resources.get("elastic_ips", []):
         if not eip.get("associated"):
             est = calc_unassociated_eip(eip, pricing)
-            issues.append(_build_issue(
-                eip, "allocation_id", "eip", "unused", est,
-                resource_name=eip.get("public_ip", ""),
-            ))
+            issues.append(
+                _build_issue(
+                    eip,
+                    "allocation_id",
+                    "eip",
+                    "unused",
+                    est,
+                    resource_name=eip.get("public_ip", ""),
+                )
+            )
 
     # --- NAT Gateways: zero traffic ---
     for nat in resources.get("nat_gateways", []):
@@ -570,17 +596,22 @@ def detect_and_price_issues(resources: dict, region: str) -> list[dict]:
     for lb in resources.get("load_balancers", []):
         if not lb.get("has_healthy_targets"):
             est = calc_idle_load_balancer(lb, pricing)
-            issues.append(_build_issue(lb, "name", "elb", "unused", est,
-                                       resource_name=lb.get("name", "")))
+            issues.append(_build_issue(lb, "name", "elb", "unused", est, resource_name=lb.get("name", "")))
 
     # --- Lambda: zero invocations ---
     for fn in resources.get("lambda_functions", []):
         if fn.get("invocations_last_30d") == 0:
             est = calc_zero_invocation_lambda(fn, pricing)
-            issues.append(_build_issue(
-                fn, "function_name", "lambda", "unused", est,
-                resource_name=fn.get("function_name", ""),
-            ))
+            issues.append(
+                _build_issue(
+                    fn,
+                    "function_name",
+                    "lambda",
+                    "unused",
+                    est,
+                    resource_name=fn.get("function_name", ""),
+                )
+            )
 
     # --- EC2: stopped instances (still paying for EBS) ---
     ebs_by_instance = _map_ebs_to_instances(resources.get("ebs_volumes", []))
@@ -603,14 +634,21 @@ def detect_and_price_issues(resources: dict, region: str) -> list[dict]:
     for rds in resources.get("rds_instances", []):
         if rds.get("multi_az"):
             est = calc_multi_az_rds(rds, pricing)
-            issues.append(_build_issue(
-                rds, "db_instance_id", "rds", "over_provisioned", est,
-                resource_name=rds.get("db_instance_id", ""),
-            ))
+            issues.append(
+                _build_issue(
+                    rds,
+                    "db_instance_id",
+                    "rds",
+                    "over_provisioned",
+                    est,
+                    resource_name=rds.get("db_instance_id", ""),
+                )
+            )
 
     logger.info(
         "Pricing engine detected %d issues (deterministic) for region %s",
-        len(issues), region,
+        len(issues),
+        region,
     )
     return issues
 

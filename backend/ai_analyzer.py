@@ -9,10 +9,10 @@ logger = logging.getLogger(__name__)
 # Supported providers and their default models
 # ---------------------------------------------------------------------------
 PROVIDER_DEFAULTS = {
-    "groq":      "openai/gpt-oss-120b",
-    "openai":    "gpt-4o-mini",
+    "groq": "openai/gpt-oss-120b",
+    "openai": "gpt-4o-mini",
     "anthropic": "claude-3-5-haiku-20241022",
-    "gemini":    "gemini-2.5-flash",
+    "gemini": "gemini-2.5-flash",
 }
 
 # ---------------------------------------------------------------------------
@@ -112,7 +112,8 @@ Fix command rules:
   * gp2 -> gp3: aws ec2 modify-volume --volume-id vol-xxx --volume-type gp3 --region {region}
   * Unattached EIP: aws ec2 release-address --allocation-id eipalloc-xxx --region {region}
   * Unattached EBS: aws ec2 delete-volume --volume-id vol-xxx --region {region}
-  * Stopped EC2 (with snapshot first): aws ec2 create-image --instance-id i-xxx --name backup --region {region} && aws ec2 terminate-instances --instance-ids i-xxx --region {region}
+  * Stopped EC2 (with snapshot first): aws ec2 create-image --instance-id i-xxx \
+--name backup --region {region} && aws ec2 terminate-instances --instance-ids i-xxx --region {region}
   * Lambda memory: aws lambda update-function-configuration --function-name xxx --memory-size 256 --region {region}
 
 If no additional issues are found beyond the pre-calculated ones, include \
@@ -127,11 +128,12 @@ MAX_RESOURCE_PAYLOAD_CHARS = 60_000
 # Provider adapters — each returns raw JSON text
 # ---------------------------------------------------------------------------
 
+
 async def _complete_groq(system: str, user: str, api_key: str, model: str) -> str:
     try:
         from groq import AsyncGroq
-    except ImportError:
-        raise RuntimeError("groq package not installed. Run: pip install groq")
+    except ImportError as err:
+        raise RuntimeError("groq package not installed. Run: pip install groq") from err
 
     client = AsyncGroq(api_key=api_key)
     response = await client.chat.completions.create(
@@ -147,8 +149,8 @@ async def _complete_groq(system: str, user: str, api_key: str, model: str) -> st
 async def _complete_openai(system: str, user: str, api_key: str, model: str) -> str:
     try:
         from openai import AsyncOpenAI
-    except ImportError:
-        raise RuntimeError("openai package not installed. Run: pip install openai")
+    except ImportError as err:
+        raise RuntimeError("openai package not installed. Run: pip install openai") from err
 
     client = AsyncOpenAI(api_key=api_key)
     response = await client.chat.completions.create(
@@ -164,8 +166,8 @@ async def _complete_openai(system: str, user: str, api_key: str, model: str) -> 
 async def _complete_anthropic(system: str, user: str, api_key: str, model: str) -> str:
     try:
         import anthropic
-    except ImportError:
-        raise RuntimeError("anthropic package not installed. Run: pip install anthropic")
+    except ImportError as err:
+        raise RuntimeError("anthropic package not installed. Run: pip install anthropic") from err
 
     client = anthropic.AsyncAnthropic(api_key=api_key)
     response = await client.messages.create(
@@ -181,8 +183,8 @@ async def _complete_anthropic(system: str, user: str, api_key: str, model: str) 
 async def _complete_gemini(system: str, user: str, api_key: str, model: str) -> str:
     try:
         import google.generativeai as genai
-    except ImportError:
-        raise RuntimeError("google-generativeai package not installed. Run: pip install google-generativeai")
+    except ImportError as err:
+        raise RuntimeError("google-generativeai package not installed. Run: pip install google-generativeai") from err
 
     genai.configure(api_key=api_key)
     llm = genai.GenerativeModel(
@@ -199,16 +201,17 @@ async def _complete_gemini(system: str, user: str, api_key: str, model: str) -> 
 
 
 PROVIDER_ADAPTERS = {
-    "groq":      _complete_groq,
-    "openai":    _complete_openai,
+    "groq": _complete_groq,
+    "openai": _complete_openai,
     "anthropic": _complete_anthropic,
-    "gemini":    _complete_gemini,
+    "gemini": _complete_gemini,
 }
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _prepare_resources_payload(resources: dict[str, list[dict]]) -> str:
     trimmed = {svc: items for svc, items in resources.items() if items}
@@ -218,9 +221,14 @@ def _prepare_resources_payload(resources: dict[str, list[dict]]) -> str:
         return payload
 
     caps = {
-        "ec2_instances": 80, "rds_instances": 40, "s3_buckets": 40,
-        "ebs_volumes": 60, "elastic_ips": 30, "load_balancers": 30,
-        "lambda_functions": 40, "nat_gateways": 20,
+        "ec2_instances": 80,
+        "rds_instances": 40,
+        "s3_buckets": 40,
+        "ebs_volumes": 60,
+        "elastic_ips": 30,
+        "load_balancers": 30,
+        "lambda_functions": 40,
+        "nat_gateways": 20,
     }
     for svc, items in trimmed.items():
         cap = caps.get(svc, 30)
@@ -343,19 +351,19 @@ def _parse_response(raw_text: str, region: str, total_resources: int, precalcula
     data = json.loads(text)
     llm_issues = [
         {
-            "resource_id":               item.get("resource_id", ""),
-            "resource_type":             item.get("resource_type", ""),
-            "resource_name":             item.get("resource_name", ""),
-            "issue_type":                item.get("issue_type", ""),
-            "severity":                  item.get("severity", "low"),
-            "explanation":               item.get("explanation", ""),
+            "resource_id": item.get("resource_id", ""),
+            "resource_type": item.get("resource_type", ""),
+            "resource_name": item.get("resource_name", ""),
+            "issue_type": item.get("issue_type", ""),
+            "severity": item.get("severity", "low"),
+            "explanation": item.get("explanation", ""),
             "estimated_monthly_savings": item.get("estimated_monthly_savings", "$0"),
-            "fix_command":               item.get("fix_command", ""),
-            "actual_monthly_cost":       item.get("actual_monthly_cost"),
-            "confidence":                item.get("confidence", "low"),
-            "calculation_method":        item.get("calculation_method", "llm_estimated"),
-            "assumptions":               item.get("assumptions", []),
-            "savings_formula":           item.get("savings_formula"),
+            "fix_command": item.get("fix_command", ""),
+            "actual_monthly_cost": item.get("actual_monthly_cost"),
+            "confidence": item.get("confidence", "low"),
+            "calculation_method": item.get("calculation_method", "llm_estimated"),
+            "assumptions": item.get("assumptions", []),
+            "savings_formula": item.get("savings_formula"),
         }
         for item in data.get("issues", [])
     ]
@@ -388,6 +396,7 @@ def _parse_response(raw_text: str, region: str, total_resources: int, precalcula
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
+
 
 async def analyze_aws_resources(
     region: str,
@@ -443,16 +452,20 @@ async def analyze_aws_resources(
     )
     adapter = PROVIDER_ADAPTERS[provider]
 
-    logger.info("Running AI analysis via provider=%s model=%s (%d precalculated issues)",
-                provider, model, len(precalculated_issues or []))
+    logger.info(
+        "Running AI analysis via provider=%s model=%s (%d precalculated issues)",
+        provider,
+        model,
+        len(precalculated_issues or []),
+    )
 
     try:
         raw_text = await asyncio.wait_for(
             adapter(SYSTEM_PROMPT, user_prompt, api_key, model),
             timeout=120,
         )
-    except asyncio.TimeoutError:
-        raise RuntimeError(f"{provider} API call timed out after 120s. Try again shortly.")
+    except TimeoutError as err:
+        raise RuntimeError(f"{provider} API call timed out after 120s. Try again shortly.") from err
     except Exception as e:
         logger.error("%s API error: %s", provider, e)
         raise RuntimeError(f"{provider} API error: {e}") from e
