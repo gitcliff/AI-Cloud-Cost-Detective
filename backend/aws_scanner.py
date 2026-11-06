@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import boto3
 from botocore.exceptions import ClientError, NoCredentialsError
@@ -47,19 +47,20 @@ def scan_ec2(session: boto3.Session) -> list[dict]:
         for page in paginator.paginate():
             for reservation in page["Reservations"]:
                 for inst in reservation["Instances"]:
-                    instances.append({
-                        "instance_id": inst["InstanceId"],
-                        "instance_type": inst["InstanceType"],
-                        "state": inst["State"]["Name"],
-                        "launch_time": inst.get("LaunchTime", "").isoformat() if inst.get("LaunchTime") else "",
-                        "name": _get_name_tag(inst.get("Tags")),
-                        "platform": inst.get("PlatformDetails", "Linux/UNIX"),
-                        "monitoring": inst.get("Monitoring", {}).get("State", "disabled"),
-                        "in_asg": any(
-                            t.get("Key") == "aws:autoscaling:groupName"
-                            for t in (inst.get("Tags") or [])
-                        ),
-                    })
+                    instances.append(
+                        {
+                            "instance_id": inst["InstanceId"],
+                            "instance_type": inst["InstanceType"],
+                            "state": inst["State"]["Name"],
+                            "launch_time": inst.get("LaunchTime", "").isoformat() if inst.get("LaunchTime") else "",
+                            "name": _get_name_tag(inst.get("Tags")),
+                            "platform": inst.get("PlatformDetails", "Linux/UNIX"),
+                            "monitoring": inst.get("Monitoring", {}).get("State", "disabled"),
+                            "in_asg": any(
+                                t.get("Key") == "aws:autoscaling:groupName" for t in (inst.get("Tags") or [])
+                            ),
+                        }
+                    )
         return instances
     except ClientError as e:
         logger.warning("Failed to scan EC2: %s", e)
@@ -73,17 +74,19 @@ def scan_rds(session: boto3.Session) -> list[dict]:
         instances = []
         for page in paginator.paginate():
             for db in page["DBInstances"]:
-                instances.append({
-                    "db_instance_id": db["DBInstanceIdentifier"],
-                    "db_instance_class": db["DBInstanceClass"],
-                    "engine": db["Engine"],
-                    "engine_version": db.get("EngineVersion", ""),
-                    "status": db["DBInstanceStatus"],
-                    "multi_az": db.get("MultiAZ", False),
-                    "storage_type": db.get("StorageType", ""),
-                    "allocated_storage_gb": db.get("AllocatedStorage", 0),
-                    "publicly_accessible": db.get("PubliclyAccessible", False),
-                })
+                instances.append(
+                    {
+                        "db_instance_id": db["DBInstanceIdentifier"],
+                        "db_instance_class": db["DBInstanceClass"],
+                        "engine": db["Engine"],
+                        "engine_version": db.get("EngineVersion", ""),
+                        "status": db["DBInstanceStatus"],
+                        "multi_az": db.get("MultiAZ", False),
+                        "storage_type": db.get("StorageType", ""),
+                        "allocated_storage_gb": db.get("AllocatedStorage", 0),
+                        "publicly_accessible": db.get("PubliclyAccessible", False),
+                    }
+                )
         return instances
     except ClientError as e:
         logger.warning("Failed to scan RDS: %s", e)
@@ -140,17 +143,19 @@ def scan_ebs(session: boto3.Session) -> list[dict]:
         for page in paginator.paginate():
             for vol in page["Volumes"]:
                 attachments = vol.get("Attachments", [])
-                volumes.append({
-                    "volume_id": vol["VolumeId"],
-                    "volume_type": vol["VolumeType"],
-                    "size_gb": vol["Size"],
-                    "state": vol["State"],
-                    "attached": len(attachments) > 0,
-                    "attached_instance_id": attachments[0]["InstanceId"] if attachments else None,
-                    "encrypted": vol.get("Encrypted", False),
-                    "iops": vol.get("Iops"),
-                    "name": _get_name_tag(vol.get("Tags")),
-                })
+                volumes.append(
+                    {
+                        "volume_id": vol["VolumeId"],
+                        "volume_type": vol["VolumeType"],
+                        "size_gb": vol["Size"],
+                        "state": vol["State"],
+                        "attached": len(attachments) > 0,
+                        "attached_instance_id": attachments[0]["InstanceId"] if attachments else None,
+                        "encrypted": vol.get("Encrypted", False),
+                        "iops": vol.get("Iops"),
+                        "name": _get_name_tag(vol.get("Tags")),
+                    }
+                )
         return volumes
     except ClientError as e:
         logger.warning("Failed to scan EBS: %s", e)
@@ -163,12 +168,14 @@ def scan_elastic_ips(session: boto3.Session) -> list[dict]:
         resp = ec2.describe_addresses()
         eips = []
         for addr in resp.get("Addresses", []):
-            eips.append({
-                "allocation_id": addr.get("AllocationId", ""),
-                "public_ip": addr.get("PublicIp", ""),
-                "associated": addr.get("AssociationId") is not None,
-                "instance_id": addr.get("InstanceId", ""),
-            })
+            eips.append(
+                {
+                    "allocation_id": addr.get("AllocationId", ""),
+                    "public_ip": addr.get("PublicIp", ""),
+                    "associated": addr.get("AssociationId") is not None,
+                    "instance_id": addr.get("InstanceId", ""),
+                }
+            )
         return eips
     except ClientError as e:
         logger.warning("Failed to scan Elastic IPs: %s", e)
@@ -188,9 +195,7 @@ def scan_load_balancers(session: boto3.Session) -> list[dict]:
                 try:
                     tgs = elbv2.describe_target_groups(LoadBalancerArn=arn)
                     for tg in tgs.get("TargetGroups", []):
-                        health = elbv2.describe_target_health(
-                            TargetGroupArn=tg["TargetGroupArn"]
-                        )
+                        health = elbv2.describe_target_health(TargetGroupArn=tg["TargetGroupArn"])
                         for t in health.get("TargetHealthDescriptions", []):
                             if t.get("TargetHealth", {}).get("State") == "healthy":
                                 has_healthy_targets = True
@@ -200,26 +205,30 @@ def scan_load_balancers(session: boto3.Session) -> list[dict]:
                 except ClientError:
                     pass
 
-                lbs.append({
-                    "name": lb["LoadBalancerName"],
-                    "arn": arn,
-                    "type": lb.get("Type", "application"),
-                    "state": lb.get("State", {}).get("Code", "unknown"),
-                    "has_healthy_targets": has_healthy_targets,
-                })
+                lbs.append(
+                    {
+                        "name": lb["LoadBalancerName"],
+                        "arn": arn,
+                        "type": lb.get("Type", "application"),
+                        "state": lb.get("State", {}).get("Code", "unknown"),
+                        "has_healthy_targets": has_healthy_targets,
+                    }
+                )
 
         # Classic ELBs
         try:
             elb = session.client("elb")
             classic_resp = elb.describe_load_balancers()
             for clb in classic_resp.get("LoadBalancerDescriptions", []):
-                lbs.append({
-                    "name": clb["LoadBalancerName"],
-                    "arn": "",
-                    "type": "classic",
-                    "state": "active",
-                    "has_healthy_targets": len(clb.get("Instances", [])) > 0,
-                })
+                lbs.append(
+                    {
+                        "name": clb["LoadBalancerName"],
+                        "arn": "",
+                        "type": "classic",
+                        "state": "active",
+                        "has_healthy_targets": len(clb.get("Instances", [])) > 0,
+                    }
+                )
         except ClientError:
             pass
 
@@ -235,7 +244,7 @@ def scan_lambda(session: boto3.Session) -> list[dict]:
         cw = session.client("cloudwatch")
         functions = []
         paginator = lam.get_paginator("list_functions")
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         thirty_days_ago = now - timedelta(days=30)
 
         for page in paginator.paginate():
@@ -257,15 +266,17 @@ def scan_lambda(session: boto3.Session) -> list[dict]:
                 except ClientError:
                     pass
 
-                functions.append({
-                    "function_name": fn_name,
-                    "runtime": fn.get("Runtime", ""),
-                    "memory_mb": fn.get("MemorySize", 128),
-                    "timeout_seconds": fn.get("Timeout", 3),
-                    "code_size_bytes": fn.get("CodeSize", 0),
-                    "last_modified": fn.get("LastModified", ""),
-                    "invocations_last_30d": invocations,
-                })
+                functions.append(
+                    {
+                        "function_name": fn_name,
+                        "runtime": fn.get("Runtime", ""),
+                        "memory_mb": fn.get("MemorySize", 128),
+                        "timeout_seconds": fn.get("Timeout", 3),
+                        "code_size_bytes": fn.get("CodeSize", 0),
+                        "last_modified": fn.get("LastModified", ""),
+                        "invocations_last_30d": invocations,
+                    }
+                )
         return functions
     except ClientError as e:
         logger.warning("Failed to scan Lambda: %s", e)
@@ -276,12 +287,10 @@ def scan_nat_gateways(session: boto3.Session) -> list[dict]:
     try:
         ec2 = session.client("ec2")
         cw = session.client("cloudwatch")
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         seven_days_ago = now - timedelta(days=7)
 
-        resp = ec2.describe_nat_gateways(
-            Filters=[{"Name": "state", "Values": ["available"]}]
-        )
+        resp = ec2.describe_nat_gateways(Filters=[{"Name": "state", "Values": ["available"]}])
         gateways = []
         for gw in resp.get("NatGateways", []):
             gw_id = gw["NatGatewayId"]
@@ -301,13 +310,15 @@ def scan_nat_gateways(session: boto3.Session) -> list[dict]:
             except ClientError:
                 pass
 
-            gateways.append({
-                "nat_gateway_id": gw_id,
-                "vpc_id": gw.get("VpcId", ""),
-                "subnet_id": gw.get("SubnetId", ""),
-                "state": gw["State"],
-                "bytes_out_7d": bytes_out,
-            })
+            gateways.append(
+                {
+                    "nat_gateway_id": gw_id,
+                    "vpc_id": gw.get("VpcId", ""),
+                    "subnet_id": gw.get("SubnetId", ""),
+                    "state": gw["State"],
+                    "bytes_out_7d": bytes_out,
+                }
+            )
         return gateways
     except ClientError as e:
         logger.warning("Failed to scan NAT Gateways: %s", e)
@@ -321,10 +332,13 @@ def scan_region(region: str) -> dict[str, list[dict]]:
         # Verify credentials
         sts = session.client("sts")
         sts.get_caller_identity()
-    except NoCredentialsError:
-        raise RuntimeError("AWS credentials not configured. Set AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY or configure ~/.aws/credentials")
+    except NoCredentialsError as err:
+        raise RuntimeError(
+            "AWS credentials not configured. "
+            "Set AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY or configure ~/.aws/credentials"
+        ) from err
     except ClientError as e:
-        raise RuntimeError(f"AWS authentication failed: {e}")
+        raise RuntimeError(f"AWS authentication failed: {e}") from e
 
     return {
         "ec2_instances": scan_ec2(session),

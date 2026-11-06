@@ -34,12 +34,8 @@ export default function Login() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-950">
       <div className="w-full max-w-sm">
-        <h1 className="text-2xl font-bold text-center mb-2">
-          AWS Cloud Cost Detective
-        </h1>
-        <p className="text-gray-500 text-center text-sm mb-8">
-          Sign in to your account
-        </p>
+        <h1 className="text-2xl font-bold text-center mb-2">AWS Cloud Cost Detective</h1>
+        <p className="text-gray-500 text-center text-sm mb-8">Sign in to your account</p>
 
         <form
           onSubmit={handleSubmit}
@@ -64,9 +60,7 @@ export default function Login() {
           </div>
 
           <div>
-            <label className="block text-sm text-gray-400 mb-1">
-              Password
-            </label>
+            <label className="block text-sm text-gray-400 mb-1">Password</label>
             <input
               type="password"
               required

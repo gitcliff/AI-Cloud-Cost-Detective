@@ -5,22 +5,32 @@ import re
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Depends, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from ai_analyzer import analyze_aws_resources
-from auth import get_current_user, hash_password, verify_password, create_token, decode_token_raw
+from auth import create_token, decode_token_raw, get_current_user, hash_password, verify_password
 from aws_scanner import get_regions, scan_region
 from cost_explorer import fetch_cost_data, merge_costs_with_resources
-from pricing_engine import detect_and_price_issues
 from db import (
-    create_pool, create_tables, create_pending_analysis, update_analysis,
-    get_history, get_analysis_by_id, get_user_by_email, create_user,
+    create_pending_analysis,
+    create_pool,
+    create_tables,
+    create_user,
+    get_analysis_by_id,
+    get_history,
+    get_user_by_email,
+    update_analysis,
 )
 from models import (
-    AnalyzeRequest, AnalyzeResponse, AuthResponse, LoginRequest,
-    RegionInfo, SignupRequest,
+    AnalyzeRequest,
+    AnalyzeResponse,
+    AuthResponse,
+    LoginRequest,
+    RegionInfo,
+    SignupRequest,
 )
+from pricing_engine import detect_and_price_issues
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
@@ -73,7 +83,7 @@ async def signup(request: SignupRequest):
     try:
         user_id = await create_user(pool, request.email, hashed)
     except ValueError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        raise HTTPException(status_code=409, detail=str(e)) from e
 
     token = create_token(user_id)
     return AuthResponse(token=token, user_id=user_id)
@@ -133,7 +143,10 @@ async def _run_analysis(analysis_id: int, region: str, include_cost_data: bool =
         # Run deterministic pricing engine to pre-calculate savings
         await _push_progress(analysis_id, "Calculating savings from pricing data...", 63)
         precalculated_issues = await loop.run_in_executor(
-            None, detect_and_price_issues, resources, region,
+            None,
+            detect_and_price_issues,
+            resources,
+            region,
         )
 
         # Send resources + pre-calculated issues to LLM for explanation
@@ -152,8 +165,13 @@ async def _run_analysis(analysis_id: int, region: str, include_cost_data: bool =
         await update_analysis(
             pool,
             analysis_id,
-            {"resources_scanned": 0, "issues_found": 0, "estimated_total_savings": "$0/month",
-             "summary": f"Analysis failed: {e}", "issues": []},
+            {
+                "resources_scanned": 0,
+                "issues_found": 0,
+                "estimated_total_savings": "$0/month",
+                "summary": f"Analysis failed: {e}",
+                "issues": [],
+            },
             status="failed",
         )
         await _push_progress(analysis_id, f"Analysis failed: {e}", -1)

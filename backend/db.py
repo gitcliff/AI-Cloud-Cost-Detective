@@ -11,9 +11,7 @@ async def create_pool() -> asyncpg.Pool:
     """Create and return a connection pool to PostgreSQL."""
     database_url = os.getenv("DATABASE_URL")
     if not database_url:
-        raise RuntimeError(
-            "DATABASE_URL not set. Add it to your .env file."
-        )
+        raise RuntimeError("DATABASE_URL not set. Add it to your .env file.")
 
     pool = await asyncpg.create_pool(database_url, min_size=2, max_size=10)
     logger.info("Database connection pool created")
@@ -76,8 +74,8 @@ async def create_user(pool: asyncpg.Pool, email: str, password_hash: str) -> int
                 email,
                 password_hash,
             )
-        except asyncpg.UniqueViolationError:
-            raise ValueError("A user with this email already exists")
+        except asyncpg.UniqueViolationError as err:
+            raise ValueError("A user with this email already exists") from err
     return row["id"]
 
 
