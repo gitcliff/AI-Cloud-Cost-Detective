@@ -50,8 +50,8 @@ Unlike tools that rely solely on AI guesses, Cloud Cost Detective calculates sav
 │         │    │  Explains issues · generates fix commands   |            │
 │         │    │  Cannot override deterministic savings      |            │
 │         │    └──────────────────────┬──────────────────────┘            │
-│         │                          │                                    │
-│         ▼                          ▼                                    │
+│         │                           │                                   │
+│         ▼                           ▼                                   │
 │  ┌──────────────────────────────────────────┐                           │
 │  │          PostgreSQL Database             |                           │
 │  │  users · analyses (JSONB results)        │                           │
@@ -59,7 +59,7 @@ Unlike tools that rely solely on AI guesses, Cloud Cost Detective calculates sav
 └─────────────────────────────────────────────────────────────────────────┘
                                 │
               ┌─────────────────┼─────────────────┐
-              ▼                 ▼                  ▼
+              ▼                 ▼                 ▼
         ┌──────────┐   ┌──────────────┐   ┌────────────┐
         │ AWS APIs │   │ AWS Pricing  │   │  LLM API   │
         │ (boto3)  │   │ API (free)   │   │ (provider) │
@@ -326,6 +326,46 @@ For real-time pricing lookups (optional, free):
   "Action": "pricing:GetProducts",
   "Resource": "*"
 }
+```
+
+---
+
+## CI/CD & Security
+
+Every push and pull request to `main` triggers a GitHub Actions pipeline with five parallel jobs:
+
+| Job | What it does |
+|-----|-------------|
+| **Gitleaks** | Scans the full git history for leaked secrets, API keys, and credentials |
+| **Backend Tests** | Ruff lint + format check, then pytest against the FastAPI backend |
+| **Frontend Tests** | ESLint, Prettier, TypeScript type-check, Vitest unit tests, and a production build |
+| **Docker Build & Trivy Scan** | Builds both Docker images, then runs Trivy vulnerability scans (HIGH/CRITICAL, unfixed ignored). SARIF reports are uploaded to GitHub Security tab |
+| **Trivy IaC Scan** | Scans Dockerfiles and docker-compose.yml for infrastructure misconfigurations |
+
+The pipeline **blocks merges** on any HIGH or CRITICAL vulnerability with a known fix, enforcing that dependencies and base images stay patched.
+
+### Development Tooling
+
+| Tool | Scope | Purpose |
+|------|-------|---------|
+| [Ruff](https://docs.astral.sh/ruff/) | Backend | Linting + formatting (replaces flake8, black, isort) |
+| [pytest](https://docs.pytest.org/) | Backend | Unit and async tests (`pytest-asyncio`) |
+| [ESLint](https://eslint.org/) | Frontend | JavaScript/TypeScript linting |
+| [Prettier](https://prettier.io/) | Frontend | Code formatting |
+| [Vitest](https://vitest.dev/) | Frontend | Unit tests |
+| [Trivy](https://trivy.dev/) | Docker | Container image + IaC vulnerability scanning |
+| [Gitleaks](https://gitleaks.io/) | Repo | Secret detection across git history |
+
+```bash
+# Run backend checks locally
+cd backend
+ruff check . && ruff format --check .
+python -m pytest tests/ -v
+
+# Run frontend checks locally
+cd frontend
+npm run lint && npm run format:check
+npx tsc --noEmit && npx vitest run
 ```
 
 ---
