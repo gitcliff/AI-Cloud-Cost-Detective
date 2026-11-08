@@ -16,9 +16,7 @@ export default function ProgressTracker({ messages, currentPercent }: Props) {
 
   return (
     <div className="mt-6 rounded-lg border border-gray-800 bg-gray-900 p-6">
-      <h3 className="text-sm font-medium text-gray-400 mb-4">
-        Analysis Progress
-      </h3>
+      <h3 className="text-sm font-medium text-gray-400 mb-4">Analysis Progress</h3>
 
       {/* Progress bar */}
       <div className="w-full bg-gray-800 rounded-full h-2 mb-6">
@@ -39,8 +37,8 @@ export default function ProgressTracker({ messages, currentPercent }: Props) {
                 msg.percent === -1
                   ? "bg-red-500"
                   : msg.percent === 100
-                  ? "bg-green-500"
-                  : "bg-blue-500"
+                    ? "bg-green-500"
+                    : "bg-blue-500"
               }`}
             />
             <span className="text-gray-300">{msg.step}</span>

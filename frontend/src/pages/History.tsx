@@ -18,17 +18,13 @@ export default function History() {
   }, []);
 
   if (loading) {
-    return (
-      <p className="text-gray-500 text-center mt-20">Loading history...</p>
-    );
+    return <p className="text-gray-500 text-center mt-20">Loading history...</p>;
   }
 
   return (
     <div>
       <h1 className="text-2xl font-bold mb-1">Analysis History</h1>
-      <p className="text-gray-500 text-sm mb-8">
-        Past cost analyses for your AWS account
-      </p>
+      <p className="text-gray-500 text-sm mb-8">Past cost analyses for your AWS account</p>
 
       {error && (
         <div className="bg-red-900/30 border border-red-800 text-red-300 text-sm rounded px-4 py-3 mb-6">
@@ -51,9 +47,7 @@ export default function History() {
                 <th className="text-left px-4 py-3 font-medium">Date</th>
                 <th className="text-right px-4 py-3 font-medium">Resources</th>
                 <th className="text-right px-4 py-3 font-medium">Issues</th>
-                <th className="text-right px-4 py-3 font-medium">
-                  Est. Savings
-                </th>
+                <th className="text-right px-4 py-3 font-medium">Est. Savings</th>
                 <th className="text-center px-4 py-3 font-medium">Status</th>
                 <th className="px-4 py-3"></th>
               </tr>
@@ -64,18 +58,12 @@ export default function History() {
                   key={a.analysis_id}
                   className="border-b border-gray-800/50 hover:bg-gray-800/30 transition-colors"
                 >
-                  <td className="px-4 py-3 font-mono text-gray-300">
-                    {a.region}
-                  </td>
+                  <td className="px-4 py-3 font-mono text-gray-300">{a.region}</td>
                   <td className="px-4 py-3 text-gray-400">
                     {new Date(a.created_at).toLocaleDateString()}
                   </td>
-                  <td className="px-4 py-3 text-right text-gray-300">
-                    {a.resources_scanned}
-                  </td>
-                  <td className="px-4 py-3 text-right text-gray-300">
-                    {a.issues_found}
-                  </td>
+                  <td className="px-4 py-3 text-right text-gray-300">{a.resources_scanned}</td>
+                  <td className="px-4 py-3 text-right text-gray-300">{a.issues_found}</td>
                   <td className="px-4 py-3 text-right text-green-400 font-medium">
                     {a.estimated_savings}
                   </td>
@@ -85,8 +73,8 @@ export default function History() {
                         a.status === "completed"
                           ? "bg-green-900 text-green-200"
                           : a.status === "failed"
-                          ? "bg-red-900 text-red-200"
-                          : "bg-yellow-900 text-yellow-200"
+                            ? "bg-red-900 text-red-200"
+                            : "bg-yellow-900 text-yellow-200"
                       }`}
                     >
                       {a.status}
@@ -95,9 +83,7 @@ export default function History() {
                   <td className="px-4 py-3 text-right">
                     {a.status === "completed" && (
                       <button
-                        onClick={() =>
-                          navigate(`/report/${a.analysis_id}`)
-                        }
+                        onClick={() => navigate(`/report/${a.analysis_id}`)}
                         className="text-blue-400 hover:text-blue-300 text-xs transition-colors"
                       >
                         View Report

@@ -16,16 +16,10 @@ export default function Navbar() {
           AWS Cloud Cost Detective
         </Link>
         <div className="flex items-center gap-6">
-          <Link
-            to="/"
-            className="text-sm text-gray-400 hover:text-white transition-colors"
-          >
+          <Link to="/" className="text-sm text-gray-400 hover:text-white transition-colors">
             Dashboard
           </Link>
-          <Link
-            to="/history"
-            className="text-sm text-gray-400 hover:text-white transition-colors"
-          >
+          <Link to="/history" className="text-sm text-gray-400 hover:text-white transition-colors">
             History
           </Link>
           <button

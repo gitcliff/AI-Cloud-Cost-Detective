@@ -34,9 +34,7 @@ function issueTypeLabel(type: string) {
 function confidenceBadge(confidence?: string, method?: string) {
   if (!confidence) {
     return (
-      <span className="px-1.5 py-0.5 rounded text-[10px] bg-gray-800 text-gray-400">
-        Legacy
-      </span>
+      <span className="px-1.5 py-0.5 rounded text-[10px] bg-gray-800 text-gray-400">Legacy</span>
     );
   }
   switch (confidence) {
@@ -87,9 +85,7 @@ function CopyButton({ text }: { text: string }) {
 
 function IssueCard({ issue }: { issue: Issue }) {
   const [showDetails, setShowDetails] = useState(false);
-  const hasDetails =
-    issue.savings_formula ||
-    (issue.assumptions && issue.assumptions.length > 0);
+  const hasDetails = issue.savings_formula || (issue.assumptions && issue.assumptions.length > 0);
 
   return (
     <div className="border border-gray-800 rounded-lg p-4 bg-gray-900">
@@ -97,18 +93,12 @@ function IssueCard({ issue }: { issue: Issue }) {
         <div>
           <div className="flex items-center gap-2 mb-1">
             <span
-              className={`px-2 py-0.5 rounded text-xs font-medium ${severityColor(
-                issue.severity
-              )}`}
+              className={`px-2 py-0.5 rounded text-xs font-medium ${severityColor(issue.severity)}`}
             >
               {issue.severity.toUpperCase()}
             </span>
-            <span className="text-xs text-gray-500 uppercase">
-              {issue.resource_type}
-            </span>
-            <span className="text-xs text-gray-600">
-              {issueTypeLabel(issue.issue_type)}
-            </span>
+            <span className="text-xs text-gray-500 uppercase">{issue.resource_type}</span>
+            <span className="text-xs text-gray-600">{issueTypeLabel(issue.issue_type)}</span>
           </div>
           <p className="text-sm font-medium text-white">
             {issue.resource_name || issue.resource_id}
@@ -116,9 +106,7 @@ function IssueCard({ issue }: { issue: Issue }) {
         </div>
         <div className="text-right whitespace-nowrap">
           {issue.actual_monthly_cost && (
-            <p className="text-xs text-gray-400">
-              Cost: {issue.actual_monthly_cost}
-            </p>
+            <p className="text-xs text-gray-400">Cost: {issue.actual_monthly_cost}</p>
           )}
           <div className="flex items-center gap-1.5 justify-end">
             <p className="text-sm font-semibold text-green-400">
@@ -144,19 +132,13 @@ function IssueCard({ issue }: { issue: Issue }) {
         <div className="bg-gray-950 border border-gray-800 rounded p-3 mb-3 space-y-2">
           {issue.savings_formula && (
             <div>
-              <span className="text-[10px] text-gray-500 uppercase tracking-wide">
-                Formula
-              </span>
-              <p className="text-xs text-gray-300 font-mono">
-                {issue.savings_formula}
-              </p>
+              <span className="text-[10px] text-gray-500 uppercase tracking-wide">Formula</span>
+              <p className="text-xs text-gray-300 font-mono">{issue.savings_formula}</p>
             </div>
           )}
           {issue.assumptions && issue.assumptions.length > 0 && (
             <div>
-              <span className="text-[10px] text-gray-500 uppercase tracking-wide">
-                Assumptions
-              </span>
+              <span className="text-[10px] text-gray-500 uppercase tracking-wide">Assumptions</span>
               <ul className="text-xs text-gray-400 list-disc list-inside mt-0.5">
                 {issue.assumptions.map((a, i) => (
                   <li key={i}>{a}</li>
@@ -166,15 +148,13 @@ function IssueCard({ issue }: { issue: Issue }) {
           )}
           {issue.calculation_method && (
             <div>
-              <span className="text-[10px] text-gray-500 uppercase tracking-wide">
-                Method
-              </span>
+              <span className="text-[10px] text-gray-500 uppercase tracking-wide">Method</span>
               <p className="text-xs text-gray-400">
                 {issue.calculation_method === "deterministic"
                   ? "Deterministic (AWS pricing formula)"
                   : issue.calculation_method === "cost_explorer"
-                  ? "Based on actual AWS Cost Explorer data"
-                  : "AI estimate based on public pricing"}
+                    ? "Based on actual AWS Cost Explorer data"
+                    : "AI estimate based on public pricing"}
               </p>
             </div>
           )}
@@ -203,16 +183,18 @@ function ServiceBreakdown({ breakdown }: { breakdown: Record<string, number> }) 
 
   return (
     <div className="bg-gray-900 border border-gray-800 rounded-lg p-4 mb-6">
-      <h2 className="text-sm font-medium text-gray-400 mb-3">
-        Cost by Service (Current Month)
-      </h2>
+      <h2 className="text-sm font-medium text-gray-400 mb-3">Cost by Service (Current Month)</h2>
       <div className="space-y-2">
         {entries.map(([service, amount]) => (
           <div key={service}>
             <div className="flex justify-between text-xs mb-1">
               <span className="text-gray-300 truncate mr-2">{service}</span>
               <span className="text-gray-400 whitespace-nowrap">
-                ${amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                $
+                {amount.toLocaleString(undefined, {
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2,
+                })}
               </span>
             </div>
             <div className="w-full bg-gray-800 rounded-full h-1.5">
@@ -243,9 +225,7 @@ export default function Report() {
   }, [analysisId]);
 
   if (loading) {
-    return (
-      <p className="text-gray-500 text-center mt-20">Loading analysis...</p>
-    );
+    return <p className="text-gray-500 text-center mt-20">Loading analysis...</p>;
   }
 
   if (error || !result) {
@@ -264,17 +244,13 @@ export default function Report() {
   const verifiedSavings = result.issues
     .filter((i) => i.confidence === "high" || i.confidence === "medium")
     .reduce((sum, i) => {
-      const val = parseFloat(
-        (i.estimated_monthly_savings || "$0").replace(/[$,/mo]/g, "")
-      );
+      const val = parseFloat((i.estimated_monthly_savings || "$0").replace(/[$,/mo]/g, ""));
       return sum + (isNaN(val) ? 0 : val);
     }, 0);
   const aiEstimatedSavings = result.issues
     .filter((i) => !i.confidence || i.confidence === "low")
     .reduce((sum, i) => {
-      const val = parseFloat(
-        (i.estimated_monthly_savings || "$0").replace(/[$,/mo]/g, "")
-      );
+      const val = parseFloat((i.estimated_monthly_savings || "$0").replace(/[$,/mo]/g, ""));
       return sum + (isNaN(val) ? 0 : val);
     }, 0);
 
@@ -282,8 +258,7 @@ export default function Report() {
     <div>
       <h1 className="text-2xl font-bold mb-1">Analysis Report</h1>
       <p className="text-gray-500 text-sm mb-6">
-        Region: {result.region} &middot;{" "}
-        {new Date(result.created_at).toLocaleDateString()}
+        Region: {result.region} &middot; {new Date(result.created_at).toLocaleDateString()}
       </p>
 
       {/* Summary cards */}
@@ -299,9 +274,7 @@ export default function Report() {
         <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
           <p className="text-xs text-gray-500 mb-1">Actual Monthly Cost</p>
           {result.actual_total_monthly_cost ? (
-            <p className="text-xl font-bold text-blue-400">
-              {result.actual_total_monthly_cost}
-            </p>
+            <p className="text-xl font-bold text-blue-400">{result.actual_total_monthly_cost}</p>
           ) : (
             <p className="text-xl font-bold text-gray-600">N/A</p>
           )}
@@ -312,7 +285,12 @@ export default function Report() {
         <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
           <p className="text-xs text-gray-500 mb-1">Verified Savings</p>
           <p className="text-xl font-bold text-green-400">
-            ${verifiedSavings.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}/mo
+            $
+            {verifiedSavings.toLocaleString(undefined, {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
+            })}
+            /mo
           </p>
           <p className="text-[10px] text-gray-600 mt-0.5">high + medium confidence</p>
         </div>
@@ -320,7 +298,12 @@ export default function Report() {
           <p className="text-xs text-gray-500 mb-1">AI Estimated Savings</p>
           {aiEstimatedSavings > 0 ? (
             <p className="text-xl font-bold text-gray-400">
-              ${aiEstimatedSavings.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}/mo
+              $
+              {aiEstimatedSavings.toLocaleString(undefined, {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2,
+              })}
+              /mo
             </p>
           ) : (
             <p className="text-xl font-bold text-gray-600">$0.00/mo</p>
@@ -348,7 +331,8 @@ export default function Report() {
           </span>
         )}
         <span className="ml-auto text-gray-500">
-          Total: <span className="text-green-400 font-semibold">{result.estimated_total_savings}</span>
+          Total:{" "}
+          <span className="text-green-400 font-semibold">{result.estimated_total_savings}</span>
         </span>
       </div>
 
@@ -374,13 +358,9 @@ export default function Report() {
       </div>
 
       {/* Issues list */}
-      <h2 className="text-lg font-semibold mb-4">
-        Issues ({result.issues.length})
-      </h2>
+      <h2 className="text-lg font-semibold mb-4">Issues ({result.issues.length})</h2>
       {result.issues.length === 0 ? (
-        <p className="text-gray-500 text-sm">
-          No cost issues found in this region.
-        </p>
+        <p className="text-gray-500 text-sm">No cost issues found in this region.</p>
       ) : (
         <div className="space-y-4">
           {result.issues.map((issue, i) => (

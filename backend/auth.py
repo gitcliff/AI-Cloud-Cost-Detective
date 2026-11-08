@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import bcrypt
 import jwt
@@ -23,18 +23,14 @@ def _get_jwt_secret() -> str:
 async def hash_password(password: str) -> str:
     """Hash a password with bcrypt. Runs in executor since bcrypt is CPU-bound."""
     loop = asyncio.get_event_loop()
-    hashed = await loop.run_in_executor(
-        None, bcrypt.hashpw, password.encode("utf-8"), bcrypt.gensalt()
-    )
+    hashed = await loop.run_in_executor(None, bcrypt.hashpw, password.encode("utf-8"), bcrypt.gensalt())
     return hashed.decode("utf-8")
 
 
 async def verify_password(password: str, hashed: str) -> bool:
     """Verify a password against its bcrypt hash. Runs in executor."""
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(
-        None, bcrypt.checkpw, password.encode("utf-8"), hashed.encode("utf-8")
-    )
+    return await loop.run_in_executor(None, bcrypt.checkpw, password.encode("utf-8"), hashed.encode("utf-8"))
 
 
 def create_token(user_id: int) -> str:
@@ -45,8 +41,8 @@ def create_token(user_id: int) -> str:
 
     payload = {
         "sub": str(user_id),
-        "exp": datetime.now(timezone.utc) + timedelta(hours=expire_hours),
-        "iat": datetime.now(timezone.utc),
+        "exp": datetime.now(UTC) + timedelta(hours=expire_hours),
+        "iat": datetime.now(UTC),
     }
     return jwt.encode(payload, secret, algorithm=algorithm)
 
@@ -65,16 +61,16 @@ def decode_token(token: str) -> int:
                 detail="Invalid token: missing subject",
             )
         return int(user_id)
-    except jwt.ExpiredSignatureError:
+    except jwt.ExpiredSignatureError as err:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token has expired",
-        )
-    except jwt.InvalidTokenError:
+        ) from err
+    except jwt.InvalidTokenError as err:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid token",
-        )
+        ) from err
 
 
 def decode_token_raw(token: str) -> int | None:
@@ -92,7 +88,7 @@ def decode_token_raw(token: str) -> int | None:
 
 
 async def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
+    credentials: HTTPAuthorizationCredentials = Depends(security),  # noqa: B008
 ) -> int:
     """FastAPI dependency that extracts and validates the JWT from the Authorization header.
     Returns the user_id."""

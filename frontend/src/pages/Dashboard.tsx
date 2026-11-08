@@ -11,13 +11,9 @@ export default function Dashboard() {
   const [includeCostData, setIncludeCostData] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [progressMessages, setProgressMessages] = useState<ProgressMessage[]>(
-    []
-  );
+  const [progressMessages, setProgressMessages] = useState<ProgressMessage[]>([]);
   const [currentPercent, setCurrentPercent] = useState(-1);
-  const [completedAnalysisId, setCompletedAnalysisId] = useState<number | null>(
-    null
-  );
+  const [completedAnalysisId, setCompletedAnalysisId] = useState<number | null>(null);
   const analysisRunningRef = useRef(false);
 
   useEffect(() => {
@@ -58,9 +54,7 @@ export default function Dashboard() {
     } catch (err: unknown) {
       if (err && typeof err === "object" && "response" in err) {
         const axiosErr = err as { response?: { data?: { detail?: string } } };
-        setError(
-          axiosErr.response?.data?.detail || "Analysis failed to start"
-        );
+        setError(axiosErr.response?.data?.detail || "Analysis failed to start");
       } else {
         setError("Network error. Please try again.");
       }
@@ -70,10 +64,9 @@ export default function Dashboard() {
 
     // Connect to WebSocket for live progress, passing JWT as query param
     const token = localStorage.getItem("token") || "";
-    const wsProtocol =
-      window.location.protocol === "https:" ? "wss:" : "ws:";
+    const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const ws = new WebSocket(
-      `${wsProtocol}//${window.location.host}/ws/progress/${analysisId}?token=${encodeURIComponent(token)}`
+      `${wsProtocol}//${window.location.host}/ws/progress/${analysisId}?token=${encodeURIComponent(token)}`,
     );
 
     ws.onmessage = (event) => {
@@ -93,9 +86,7 @@ export default function Dashboard() {
     };
 
     ws.onerror = () => {
-      setError(
-        "Live progress connection failed. Your analysis is still running."
-      );
+      setError("Live progress connection failed. Your analysis is still running.");
       setCompletedAnalysisId(analysisId);
       stopAnalysis();
     };
@@ -124,10 +115,7 @@ export default function Dashboard() {
       {completedAnalysisId && (
         <div className="bg-blue-900/30 border border-blue-800 text-blue-300 text-sm rounded px-4 py-3 mb-6">
           Analysis #{completedAnalysisId} may still be running.{" "}
-          <Link
-            to={`/report/${completedAnalysisId}`}
-            className="underline hover:text-blue-200"
-          >
+          <Link to={`/report/${completedAnalysisId}`} className="underline hover:text-blue-200">
             Check the report
           </Link>{" "}
           or visit{" "}
@@ -141,9 +129,7 @@ export default function Dashboard() {
       <div className="bg-gray-900 border border-gray-800 rounded-lg p-6">
         <div className="flex flex-col sm:flex-row gap-4 items-end">
           <div className="flex-1 w-full">
-            <label className="block text-sm text-gray-400 mb-1">
-              AWS Region
-            </label>
+            <label className="block text-sm text-gray-400 mb-1">AWS Region</label>
             <select
               value={selectedRegion}
               onChange={(e) => setSelectedRegion(e.target.value)}
@@ -157,8 +143,7 @@ export default function Dashboard() {
               ))}
             </select>
             <p className="text-xs text-gray-600 mt-1">
-              Scans: EC2, RDS, S3, EBS, Elastic IPs, Load Balancers, Lambda,
-              NAT Gateways
+              Scans: EC2, RDS, S3, EBS, Elastic IPs, Load Balancers, Lambda, NAT Gateways
             </p>
             <label className="flex items-center gap-2 mt-3 cursor-pointer">
               <input
@@ -185,10 +170,7 @@ export default function Dashboard() {
       </div>
 
       {progressMessages.length > 0 && (
-        <ProgressTracker
-          messages={progressMessages}
-          currentPercent={currentPercent}
-        />
+        <ProgressTracker messages={progressMessages} currentPercent={currentPercent} />
       )}
     </div>
   );
