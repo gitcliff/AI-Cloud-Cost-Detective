@@ -189,6 +189,19 @@ The frontend is a static SPA that needs to route API calls (`/api/*`) and WebSoc
 
 ---
 
+## Screenshots
+
+### Dashboard — select an AWS region and launch an analysis
+![Dashboard](docs/screenshots/dashboard.png)
+
+### Analysis Report — issue card with severity, estimated savings, and a ready-to-run fix command
+![Report](docs/screenshots/report-issue-card.png)
+
+### CI/CD — all pipeline jobs passing
+![CI Pipeline](docs/screenshots/ci-pipeline.png)
+
+---
+
 ## Getting Started
 
 ### Prerequisites
@@ -343,6 +356,8 @@ Every push and pull request to `main` triggers a GitHub Actions pipeline with fi
 | **Trivy IaC Scan** | Scans Dockerfiles and docker-compose.yml for infrastructure misconfigurations |
 
 The pipeline **blocks merges** on any HIGH or CRITICAL vulnerability with a known fix, enforcing that dependencies and base images stay patched.
+
+![CI Pipeline](docs/screenshots/ci-pipeline.png)
 
 ### Development Tooling
 
