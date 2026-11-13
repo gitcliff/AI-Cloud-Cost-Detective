@@ -315,6 +315,7 @@ describe("GovernancePanel", () => {
     expect(govApi.listEvaluations).toHaveBeenCalledWith(11, {
       status: "fail",
       kind: "confirmed",
+      excepted: false, // accepted exceptions have their own view
       severity: undefined,
       category: undefined,
     });

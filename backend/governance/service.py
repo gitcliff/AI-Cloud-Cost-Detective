@@ -71,10 +71,20 @@ async def execute_scan(
     explainer = explainer or explain_evaluations
     loop = asyncio.get_running_loop()
     try:
+        # The account's policy and currently active risk exceptions. If they can't be
+        # loaded the scan fails rather than silently running with default settings.
+        policy, exceptions = await store.load_scan_inputs(pool, scan_id)
         report = await asyncio.wait_for(
             loop.run_in_executor(
                 GOVERNANCE_EXECUTOR,
-                partial(runner, region, account_id=aws_account_id, include_iam=include_iam),
+                partial(
+                    runner,
+                    region,
+                    account_id=aws_account_id,
+                    include_iam=include_iam,
+                    policy=policy,
+                    exceptions=exceptions,
+                ),
             ),
             timeout=SCAN_TIMEOUT_SECONDS,
         )

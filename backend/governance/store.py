@@ -15,6 +15,8 @@ import asyncpg
 
 from governance.engine import GovernanceReport
 from governance.models import CollectorStatus, RuleSpec
+from governance.policy import GovernancePolicy
+from governance.policy_config import AccountPolicy
 
 ERROR_MAX_CHARS = 500
 
@@ -334,13 +336,16 @@ async def list_evaluations(
     severity: str | None = None,
     category: str | None = None,
     kind: str | None = None,
+    excepted: bool | None = None,
     after: str | None = None,
     limit: int = 100,
 ) -> tuple[list[dict], str | None] | None:
     """Evaluations ordered most severe first, keyset-paginated.
 
-    The cursor is "<severity rank>:<id>" of the last row returned. Returns None if
-    the caller doesn't own the scan; raises ValueError for a malformed cursor.
+    `excepted` True/False selects only evaluations with/without an accepted-risk
+    exception. The cursor is "<severity rank>:<id>" of the last row returned.
+    Returns None if the caller doesn't own the scan; raises ValueError for a
+    malformed cursor.
     """
     after_rank = after_id = None
     if after is not None:
@@ -369,6 +374,7 @@ async def list_evaluations(
                    AND ($3::text IS NULL OR severity = $3)
                    AND ($4::text IS NULL OR category = $4)
                    AND ($5::text IS NULL OR kind = $5)
+                   AND ($9::boolean IS NULL OR (exception_id IS NOT NULL) = $9)
             ) ranked
              WHERE ($6::int IS NULL OR (severity_rank, id) > ($6, $7::bigint))
              ORDER BY severity_rank, id
@@ -382,6 +388,7 @@ async def list_evaluations(
             after_rank,
             after_id,
             limit + 1,
+            excepted,
         )
     hidden = ("scan_id", "evidence", "details", "evaluated_at", "severity_rank")
     items = [
@@ -398,3 +405,183 @@ async def list_evaluations(
         last = rows[limit - 1]
         next_cursor = f"{last['severity_rank']}:{last['id']}"
     return items, next_cursor
+
+
+# ── Account policy, risk exceptions, trends (Phase 6) ────────────────────────
+
+
+async def _owns_account(conn, user_id: int, account_pk: int) -> bool:
+    return bool(await conn.fetchval("SELECT 1 FROM aws_accounts WHERE id = $1 AND user_id = $2", account_pk, user_id))
+
+
+async def get_policy(pool: asyncpg.Pool, user_id: int, account_pk: int) -> dict | None:
+    async with pool.acquire() as conn:
+        if not await _owns_account(conn, user_id, account_pk):
+            return None
+        row = await conn.fetchrow("SELECT settings, updated_at FROM account_policies WHERE account_id = $1", account_pk)
+    if row is None:
+        return {"settings": AccountPolicy().model_dump(), "updated_at": None, "is_default": True}
+    return {
+        "settings": AccountPolicy.model_validate(_json(row["settings"])).model_dump(),
+        "updated_at": _iso(row["updated_at"]),
+        "is_default": False,
+    }
+
+
+async def save_policy(pool: asyncpg.Pool, user_id: int, account_pk: int, policy: AccountPolicy) -> bool:
+    async with pool.acquire() as conn:
+        if not await _owns_account(conn, user_id, account_pk):
+            return False
+        await conn.execute(
+            """
+            INSERT INTO account_policies (account_id, settings, updated_at, updated_by)
+            VALUES ($1, $2::jsonb, NOW(), $3)
+            ON CONFLICT (account_id) DO UPDATE
+               SET settings = EXCLUDED.settings, updated_at = NOW(), updated_by = EXCLUDED.updated_by
+            """,
+            account_pk,
+            policy.model_dump_json(),
+            user_id,
+        )
+    return True
+
+
+async def load_scan_inputs(pool: asyncpg.Pool, scan_id: int) -> tuple[GovernancePolicy, dict[tuple[str, str], int]]:
+    """Internal: the account policy and the exceptions active right now, for the scan's account."""
+    async with pool.acquire() as conn:
+        account_pk = await conn.fetchval("SELECT account_id FROM governance_scans WHERE id = $1", scan_id)
+        if account_pk is None:
+            raise LookupError(f"governance scan {scan_id} not found")
+        settings = await conn.fetchval("SELECT settings FROM account_policies WHERE account_id = $1", account_pk)
+        rows = await conn.fetch(
+            """
+            SELECT id, rule_id, resource_id FROM risk_exceptions
+             WHERE account_id = $1 AND revoked_at IS NULL AND expires_at > NOW()
+            """,
+            account_pk,
+        )
+    policy = AccountPolicy.model_validate(_json(settings)) if settings else AccountPolicy()
+    return policy.to_governance_policy(), {(r["rule_id"], r["resource_id"]): r["id"] for r in rows}
+
+
+def _exception(row) -> dict:
+    now = datetime.now(row["expires_at"].tzinfo)
+    state = "revoked" if row["revoked_at"] else ("expired" if row["expires_at"] <= now else "active")
+    return {
+        "id": row["id"],
+        "account_id": row["account_id"],
+        "rule_id": row["rule_id"],
+        "resource_id": row["resource_id"],
+        "reason": row["reason"],
+        "created_by": row["created_by"],
+        "created_at": _iso(row["created_at"]),
+        "expires_at": _iso(row["expires_at"]),
+        "revoked_at": _iso(row["revoked_at"]),
+        "state": state,
+    }
+
+
+async def list_exceptions(pool: asyncpg.Pool, user_id: int, account_pk: int) -> list[dict] | None:
+    async with pool.acquire() as conn:
+        if not await _owns_account(conn, user_id, account_pk):
+            return None
+        rows = await conn.fetch(
+            "SELECT * FROM risk_exceptions WHERE account_id = $1 ORDER BY created_at DESC, id DESC", account_pk
+        )
+    return [_exception(r) for r in rows]
+
+
+class ExceptionConflict(Exception):
+    """A live exception already exists for this rule and resource."""
+
+
+async def create_exception(
+    pool: asyncpg.Pool,
+    user_id: int,
+    account_pk: int,
+    rule_id: str,
+    resource_id: str,
+    reason: str,
+    expires_at: datetime,
+) -> dict | None:
+    async with pool.acquire() as conn:
+        if not await _owns_account(conn, user_id, account_pk):
+            return None
+        try:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO risk_exceptions (account_id, rule_id, resource_id, reason, created_by, expires_at)
+                VALUES ($1, $2, $3, $4, $5, $6) RETURNING *
+                """,
+                account_pk,
+                rule_id,
+                resource_id,
+                reason,
+                user_id,
+                expires_at,
+            )
+        except asyncpg.UniqueViolationError as err:
+            raise ExceptionConflict from err
+    return _exception(row)
+
+
+async def revoke_exception(pool: asyncpg.Pool, user_id: int, account_pk: int, exception_id: int) -> bool:
+    async with pool.acquire() as conn:
+        if not await _owns_account(conn, user_id, account_pk):
+            return False
+        result = await conn.execute(
+            """
+            UPDATE risk_exceptions SET revoked_at = NOW(), revoked_by = $3
+             WHERE id = $1 AND account_id = $2 AND revoked_at IS NULL
+            """,
+            exception_id,
+            account_pk,
+            user_id,
+        )
+    return result.endswith(" 1")
+
+
+async def trends(pool: asyncpg.Pool, user_id: int, account_pk: int, limit: int = 50) -> list[dict] | None:
+    """Finished scans for an account, oldest first, with rule-set change markers.
+
+    Scores are only comparable between scans evaluated with the same rule versions,
+    so each point says whether the rule set changed since the previous point.
+    """
+    async with pool.acquire() as conn:
+        if not await _owns_account(conn, user_id, account_pk):
+            return None
+        rows = await conn.fetch(
+            """
+            SELECT * FROM (
+                SELECT id, region, include_iam, status, finished_at, posture_score, coverage,
+                       overall_status, posture, rule_versions
+                  FROM governance_scans
+                 WHERE account_id = $1 AND status IN ('completed', 'partial')
+                 ORDER BY finished_at DESC, id DESC
+                 LIMIT $2
+            ) recent ORDER BY finished_at, id
+            """,
+            account_pk,
+            limit,
+        )
+    points, previous = [], None
+    for r in rows:
+        versions = _json(r["rule_versions"]) or {}
+        posture = _json(r["posture"]) or {}
+        points.append(
+            {
+                "scan_id": r["id"],
+                "finished_at": _iso(r["finished_at"]),
+                "region": r["region"],
+                "include_iam": r["include_iam"],
+                "status": r["status"],
+                "posture_score": float(r["posture_score"]) if r["posture_score"] is not None else None,
+                "coverage": float(r["coverage"]) if r["coverage"] is not None else None,
+                "overall_status": r["overall_status"],
+                "failed": (posture.get("counts") or {}).get("fail"),
+                "excepted": (posture.get("counts") or {}).get("excepted"),
+                "rule_set_changed": previous is not None and versions != previous,
+            }
+        )
+        previous = versions
+    return points

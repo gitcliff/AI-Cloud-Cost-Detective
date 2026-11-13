@@ -182,3 +182,78 @@ export interface ProgressMessage {
   step: string;
   percent: number;
 }
+
+// ── Governance settings (Phase 6) ─────────────────────────────────────────
+
+export interface GovernanceAccount {
+  id: number;
+  aws_account_id: string;
+  alias: string | null;
+  credential_mode: "ambient" | "assume_role";
+  created_at: string;
+}
+
+export interface AccountPolicy {
+  mandatory_tags: string[];
+  allowed_tag_values: Record<string, string[]>;
+  case_insensitive_tag_keys: boolean;
+  case_insensitive_tag_values: boolean;
+  environment_tag_key: string;
+  production_values: string[];
+  require_s3_versioning: boolean;
+  require_rds_auto_minor_upgrade: boolean;
+  rds_min_backup_retention_days: number;
+  iam_key_unused_days: number;
+  iam_key_max_age_days: number;
+  iam_min_password_length: number;
+  iam_min_password_reuse_prevention: number;
+  trusted_account_ids: string[];
+  disabled_rules: string[];
+  severity_overrides: Record<string, GovernanceSeverity>;
+  gate_rules: string[];
+}
+
+export interface PolicyResponse {
+  settings: AccountPolicy;
+  updated_at: string | null;
+  is_default: boolean;
+}
+
+export interface GovernanceRule {
+  rule_id: string;
+  version: number;
+  name: string;
+  category: string;
+  default_severity: GovernanceSeverity;
+  scope: "resource" | "account";
+  global: boolean;
+  remediation_ref: string | null;
+  description: string;
+}
+
+export interface RiskException {
+  id: number;
+  account_id: number;
+  rule_id: string;
+  resource_id: string;
+  reason: string;
+  created_by: number | null;
+  created_at: string;
+  expires_at: string;
+  revoked_at: string | null;
+  state: "active" | "expired" | "revoked";
+}
+
+export interface TrendPoint {
+  scan_id: number;
+  finished_at: string;
+  region: string;
+  include_iam: boolean;
+  status: ScanStatus;
+  posture_score: number | null;
+  coverage: number | null;
+  overall_status: OverallStatus | null;
+  failed: number | null;
+  excepted: number | null;
+  rule_set_changed: boolean;
+}

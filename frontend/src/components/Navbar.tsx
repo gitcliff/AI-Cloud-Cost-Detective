@@ -22,6 +22,12 @@ export default function Navbar() {
           <Link to="/history" className="text-sm text-gray-400 hover:text-white transition-colors">
             History
           </Link>
+          <Link
+            to="/governance"
+            className="text-sm text-gray-400 hover:text-white transition-colors"
+          >
+            Governance
+          </Link>
           <button
             onClick={handleLogout}
             className="text-sm text-gray-400 hover:text-red-400 transition-colors"

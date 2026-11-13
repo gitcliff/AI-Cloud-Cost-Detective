@@ -1,5 +1,6 @@
 import { useState } from "react";
 import CopyButton from "../CopyButton";
+import AcceptRiskForm from "./AcceptRiskForm";
 import type { GovernanceEvaluation, Remediation } from "../../types";
 import { REMEDIATION_TYPE, UNKNOWN_REASONS, categoryLabel, severityClass } from "./labels";
 
@@ -123,11 +124,19 @@ export function RemediationPanel({ remediation }: { remediation: Remediation }) 
   );
 }
 
-export default function EvaluationCard({ evaluation }: { evaluation: GovernanceEvaluation }) {
+export default function EvaluationCard({
+  evaluation,
+  accountId,
+}: {
+  evaluation: GovernanceEvaluation;
+  accountId?: number;
+}) {
   const [showEvidence, setShowEvidence] = useState(false);
   const [showFix, setShowFix] = useState(false);
+  const [accepting, setAccepting] = useState(false);
   const e = evaluation;
   const failed = e.status === "fail";
+  const excepted = failed && e.exception_id !== null;
 
   return (
     <div className="border border-gray-800 rounded-lg p-4 bg-gray-900" data-testid="evaluation">
@@ -149,6 +158,14 @@ export default function EvaluationCard({ evaluation }: { evaluation: GovernanceE
             }
           >
             {e.kind === "confirmed" ? "Confirmed" : "Potential"}
+          </span>
+        )}
+        {excepted && (
+          <span
+            className="px-2 py-0.5 rounded text-xs bg-indigo-950 text-indigo-300"
+            title="Counted as an accepted exception, not a failure, while the exception is active"
+          >
+            Accepted risk #{e.exception_id}
           </span>
         )}
         {e.status === "unknown" && (
@@ -212,7 +229,20 @@ export default function EvaluationCard({ evaluation }: { evaluation: GovernanceE
             {showFix ? "Hide remediation" : "Show remediation"}
           </button>
         )}
+        {failed && !excepted && accountId !== undefined && !accepting && (
+          <button
+            type="button"
+            onClick={() => setAccepting(true)}
+            className="text-xs text-gray-400 hover:text-gray-200 transition-colors ml-auto"
+          >
+            Accept risk
+          </button>
+        )}
       </div>
+
+      {accepting && accountId !== undefined && (
+        <AcceptRiskForm evaluation={e} accountId={accountId} onDone={() => setAccepting(false)} />
+      )}
 
       {showEvidence && (
         <pre

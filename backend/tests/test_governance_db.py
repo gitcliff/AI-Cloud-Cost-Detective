@@ -105,7 +105,12 @@ async def test_migrations_upgrade_legacy_database_preserving_rows():
             json.dumps({"summary": "legacy", "issues": []}),
         )
         applied = await run_migrations(conn)
-        assert applied == ["0001_baseline", "0002_governance", "0003_governance_ai"]
+        assert applied == [
+            "0001_baseline",
+            "0002_governance",
+            "0003_governance_ai",
+            "0004_governance_policy_exceptions",
+        ]
         row = await conn.fetchrow("SELECT * FROM analyses")
         assert row["issues_found"] == 3 and json.loads(row["analysis_result"])["summary"] == "legacy"
         assert row["governance_status"] is None and row["aws_account_id"] is None
