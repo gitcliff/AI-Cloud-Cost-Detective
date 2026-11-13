@@ -1,8 +1,8 @@
 # AI Cloud Cost Detective for AWS
 
-An intelligent AWS cost optimization tool that combines **deterministic pricing calculations** with **LLM-powered analysis** to find wasteful cloud spending and deliver actionable fix commands.
+An intelligent AWS cloud management tool that combines **deterministic pricing calculations**, **LLM-powered analysis**, and a **built-in governance engine** to find wasteful cloud spending, detect security misconfigurations, and enforce policy compliance — all from a single scan.
 
-Unlike tools that rely solely on AI guesses, Cloud Cost Detective calculates savings from real AWS pricing data and resource configuration — then uses an LLM only to explain findings, assess severity, and generate remediation commands.
+Unlike tools that rely solely on AI guesses, Cloud Cost Detective calculates savings from real AWS pricing data and resource configuration — then uses an LLM only to explain findings, assess severity, and generate remediation commands. The governance engine runs deterministic rules against your AWS account and produces a scored posture report with zero LLM involvement.
 
 ---
 
@@ -13,12 +13,12 @@ Unlike tools that rely solely on AI guesses, Cloud Cost Detective calculates sav
 │                              Browser                                   │
 │                   React + TypeScript + Tailwind CSS                    │
 │                                                                        │
-│   ┌──────────┐   ┌───────────┐ ┌──────────┐   ┌────────┐  ┌──────────┐ │
-│   │  Login/  |   │ Dashboard │ │ Progress │   │History │  │  Report  │ │
-│   │  Signup  |   │  Region   │ │ Tracker  │   │  List  │  │  Detail  │ │
-│   │          │   │  Selector │ │   (WS)   │   │        │  │          │ │
-│   └──────────┘   └─────┬─────┘ └────┬─────┘   └───┬────┘  └────┬─────┘ │
-└────────────────────────┼────────────┼─────────────┼────────────┼───────┘
+│   ┌──────────┐   ┌───────────┐ ┌──────────┐   ┌────────┐  ┌──────────┐ ┌──────────┐│
+│   │  Login/  |   │ Dashboard │ │ Progress │   │History │  │  Report  │ │Governance││
+│   │  Signup  |   │  Region   │ │ Tracker  │   │  List  │  │  Detail  │ │ Settings ││
+│   │          │   │  Selector │ │   (WS)   │   │        │  │+Gov Panel│ │          ││
+│   └──────────┘   └─────┬─────┘ └────┬─────┘   └───┬────┘  └────┬─────┘ └────┬─────┘│
+└────────────────────────┼────────────┼─────────────┼────────────┼────────────┼──────┘
                          │ REST       │ WebSocket   │ REST       │ REST
                          ▼            ▼             ▼            ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -51,10 +51,18 @@ Unlike tools that rely solely on AI guesses, Cloud Cost Detective calculates sav
 │         │    │  Cannot override deterministic savings      |            │
 │         │    └──────────────────────┬──────────────────────┘            │
 │         │                           │                                   │
+│         │    ┌─────────────────────────────────────────────┐            │
+│         │    │      Governance Engine (Deterministic)      │            │
+│         │    │  23 rules across 4 categories               │            │
+│         │    │  security · IAM · operations · tagging      │            │
+│         │    │  Posture score · risk acceptance · policy   │            │
+│         │    └──────────────────────┬──────────────────────┘            │
+│         │                           │                                   │
 │         ▼                           ▼                                   │
 │  ┌──────────────────────────────────────────┐                           │
 │  │          PostgreSQL Database             |                           │
-│  │  users · analyses (JSONB results)        │                           │
+│  │  users · analyses (JSONB) · gov scans   │                           │
+│  │  evaluations · exceptions · policies    │                           │
 │  └──────────────────────────────────────────┘                           │
 └─────────────────────────────────────────────────────────────────────────┘
                                 │
@@ -86,7 +94,13 @@ Start Analysis
      ├──── LLM Analysis (explain, don't calculate)
      │          └──── Severity · Explanations · Fix commands · New findings
      │
-     └──── Store Results → PostgreSQL (JSONB)
+     ├──── Governance Scan (runs in parallel, non-blocking)
+     │          └──── 23 deterministic rules across security, IAM, ops, tagging
+     │          └──── Posture score (0–100) with coverage and severity weighting
+     │          └──── Confirmed violations + potential risks + UNKNOWN (access denied)
+     │
+     └──── Store Results → PostgreSQL
+                └──── JSONB cost results · governance evaluations · posture score
 ```
 
 ---
@@ -126,7 +140,36 @@ AI-Cloud-Cost-Detective/
 │           ├── Signup.tsx           # Registration
 │           ├── Dashboard.tsx        # Region selector + analysis launcher
 │           ├── History.tsx          # Past analyses list
-│           └── Report.tsx           # Detailed results with issue cards
+│           ├── Report.tsx           # Detailed results with issue cards
+│           └── GovernanceSettings.tsx # Policy editor (thresholds, tag rules, trusted accounts)
+│       └── components/governance/
+│               ├── GovernancePanel.tsx  # Violations, risks, posture summary (per-analysis)
+│               ├── EvaluationCard.tsx   # Single evaluation with evidence + remediation
+│               ├── PostureSummary.tsx   # Weighted score + pass/fail/unknown breakdown
+│               ├── AcceptRiskForm.tsx   # Risk-acceptance workflow with expiry
+│               ├── ExceptionsList.tsx   # Manage accepted risk exceptions
+│               ├── PolicyForm.tsx       # Inline policy configuration editor
+│               └── TrendChart.tsx       # Posture score over time
+│
+├── backend/governance/
+│   ├── engine.py           # Orchestrates collectors → rules → scoring
+│   ├── models.py           # Evaluation, Outcome, Status, Severity, Category
+│   ├── scoring.py          # Weighted posture score + coverage tracking
+│   ├── policy.py           # GovernancePolicy runtime model
+│   ├── policy_config.py    # Validated, user-editable AccountPolicy (Pydantic)
+│   ├── policy_analysis.py  # Static IAM policy analysis (admin-level detection)
+│   ├── collectors.py       # EC2, RDS, S3, Lambda, EBS snapshot collectors
+│   ├── iam_collectors.py   # IAM credential report, account summary, roles, policies
+│   ├── remediation.py      # Remediation command templates per rule
+│   ├── explain.py          # LLM-generated plain-English explanations for violations
+│   ├── store.py            # PostgreSQL persistence for scans, evaluations, exceptions
+│   ├── service.py          # Async scan orchestration (non-blocking alongside cost analysis)
+│   ├── api.py              # REST endpoints: scan, evaluations, policy, exceptions
+│   └── rules/
+│       ├── security.py     # 8 security rules (encryption, public exposure, IMDSv2, …)
+│       ├── iam.py          # 11 IAM rules (root MFA, key age, admin access, password policy)
+│       ├── operations.py   # 2 operations rules (RDS backup, auto minor upgrade)
+│       └── tagging.py      # 2 tagging rules (mandatory tags, disallowed values)
 ```
 
 ---
@@ -157,6 +200,24 @@ An analysis involves 6 sequential stages (scan, cost fetch, merge, price, analyz
 
 The frontend is a static SPA that needs to route API calls (`/api/*`) and WebSocket connections (`/ws/*`) to the backend. Nginx handles this cleanly in production, serves static assets efficiently, and provides the SPA fallback routing (`try_files`) that React Router requires.
 
+### Why is the governance engine deterministic and not LLM-based?
+
+Security posture is binary: a root account either has MFA enabled or it doesn't. An EBS volume is either encrypted or it isn't. An IAM key is either older than 90 days or it isn't. These facts don't need an LLM — they need a correct rule applied to a snapshot. Deterministic rules produce auditable, reproducible results: the same AWS account state produces the same score every time, with no variance from model temperature or prompt drift.
+
+The LLM is opt-in for governance only where it adds value: generating plain-English explanations of *why* a violation matters for a specific resource and *what to do* about it.
+
+### Why separate "confirmed" violations from "potential" risks?
+
+Read-only inspection has limits. Whether an RDS instance is truly internet-exposed depends on security group rules, subnet routing, and network ACLs — all of which can be collected. But whether an IAM role with a broad trust policy is *actually* used by an untrusted principal requires runtime data we don't have. The `CONFIRMED` / `POTENTIAL` distinction prevents read-only analysis from making claims it can't support, while still surfacing risks worth reviewing.
+
+### Why track UNKNOWN evaluations separately?
+
+An access-denied API call is not a pass. If the scanner can't read IAM credential reports because the credentials lack `iam:GenerateCredentialReport`, that's missing coverage, not a clean bill of health. UNKNOWN evaluations are surfaced in the UI alongside the posture score's coverage percentage, so users know exactly how complete their scan was.
+
+### Why risk acceptance instead of just muting violations?
+
+Security exceptions are business decisions that need an owner, a justification, and an expiry date. The risk acceptance workflow requires a reason and an optional expiration, persists the exception to the database, and surfaces it separately from real violations. This creates an audit trail and forces periodic review of standing exceptions.
+
 ---
 
 ## What Makes This Project Useful
@@ -167,7 +228,13 @@ The frontend is a static SPA that needs to route API calls (`/api/*`) and WebSoc
 
 **Real cost data integration** — Optionally pulls actual spend from AWS Cost Explorer, so you see what you're *actually* paying alongside what you *could* save.
 
-**9 automated detectors** covering the most common AWS cost wastes:
+**Governance posture scoring** — A weighted 0–100 score across security, IAM, operations, and tagging rules. The score accounts for coverage (access-denied calls don't silently inflate your score), severity weighting (CRITICAL failures matter more than LOW), and accepted risk exceptions.
+
+**Risk acceptance with audit trail** — Accept a governance exception with a reason and optional expiry date. Exceptions are stored separately from violations, surfaced in a dedicated view, and expire automatically — forcing periodic review rather than silent indefinite mutes.
+
+**Configurable account policies** — Set mandatory tags, disallowed tag values, IAM key age thresholds, password policy requirements, trusted AWS account IDs, and opt-in rules — all without touching code.
+
+**9 automated cost detectors** covering the most common AWS cost wastes:
 
 | Detector | What it finds | Confidence |
 |----------|--------------|------------|
@@ -180,6 +247,35 @@ The frontend is a static SPA that needs to route API calls (`/api/*`) and WebSoc
 | Stopped EC2 EBS costs | EBS volumes still billing on stopped instances | High |
 | Old-gen instances | t2, m3/m4, c3/c4, r3/r4 that should be upgraded | Medium |
 | Multi-AZ RDS | Databases where single-AZ would suffice | Medium |
+
+**23 governance rules** across four categories:
+
+| Category | Rule | Severity | Kind |
+|----------|------|----------|------|
+| **Security** | RDS possibly internet-exposed | Critical | Potential |
+| **Security** | EBS volume unencrypted | High | Confirmed |
+| **Security** | EBS default encryption disabled | Medium | Confirmed |
+| **Security** | S3 public access block missing | Critical | Confirmed |
+| **Security** | S3 bucket policy allows public access | Critical | Confirmed |
+| **Security** | S3 versioning not enabled | Medium | Confirmed |
+| **Security** | Lambda running unsupported runtime | High | Confirmed |
+| **Security** | EC2 IMDSv2 not enforced | Medium | Confirmed |
+| **IAM** | Root account MFA not enabled | Critical | Confirmed |
+| **IAM** | Root account has active access keys | Critical | Confirmed |
+| **IAM** | Console user without MFA | High | Confirmed |
+| **IAM** | Access key unused (configurable threshold) | Medium | Confirmed |
+| **IAM** | Access key exceeds max age (configurable) | Medium | Confirmed |
+| **IAM** | User with direct admin policy | High | Confirmed |
+| **IAM** | User with admin access via group | High | Confirmed |
+| **IAM** | Attached policy grants admin | High | Confirmed |
+| **IAM** | Role trust policy with wildcard principal | High | Potential |
+| **IAM** | Role trusts external AWS account | Medium | Potential |
+| **IAM** | Account password policy missing | High | Confirmed |
+| **IAM** | Account password policy too weak | Medium | Confirmed |
+| **Operations** | RDS backup retention below threshold | Medium | Confirmed |
+| **Operations** | RDS auto minor upgrade disabled | Low | Confirmed |
+| **Tagging** | Missing mandatory tags | Medium | Confirmed |
+| **Tagging** | Tag value not in allowed list | Low | Confirmed |
 
 **Multi-region scanning** — Analyze any of 16 AWS regions. Most tools only check us-east-1.
 
@@ -294,7 +390,7 @@ The app is available at **http://localhost:5173**. Vite proxies `/api` and `/ws`
 
 ## IAM Permissions
 
-The minimum IAM policy for scanning (read-only):
+The minimum IAM policy for cost scanning (read-only):
 
 ```json
 {
@@ -318,6 +414,36 @@ The minimum IAM policy for scanning (read-only):
       "Resource": "*"
     }
   ]
+}
+```
+
+For governance scanning, add these permissions (each is optional — missing permissions produce UNKNOWN results, not errors):
+
+```json
+{
+  "Effect": "Allow",
+  "Action": [
+    "ec2:GetEbsEncryptionByDefault",
+    "s3:GetBucketPublicAccessBlock",
+    "s3:GetBucketPolicy",
+    "lambda:GetFunctionConfiguration",
+    "iam:GenerateCredentialReport",
+    "iam:GetCredentialReport",
+    "iam:GetAccountSummary",
+    "iam:GetAccountPasswordPolicy",
+    "iam:ListUsers",
+    "iam:ListRoles",
+    "iam:ListPolicies",
+    "iam:GetPolicy",
+    "iam:GetPolicyVersion",
+    "iam:ListAttachedUserPolicies",
+    "iam:ListAttachedGroupPolicies",
+    "iam:ListAttachedRolePolicies",
+    "iam:ListGroupsForUser",
+    "iam:ListUserPolicies",
+    "iam:GetUserPolicy"
+  ],
+  "Resource": "*"
 }
 ```
 
