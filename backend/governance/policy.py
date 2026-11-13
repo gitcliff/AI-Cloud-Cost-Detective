@@ -36,12 +36,20 @@ class GovernancePolicy:
     rds_min_backup_retention_days: int = 7
     runtime_policy_max_age_days: int = 180
 
+    # IAM thresholds
+    iam_key_unused_days: int = 90
+    iam_key_max_age_days: int = 90
+    iam_min_password_length: int = 14
+    iam_min_password_reuse_prevention: int = 1
+    # External AWS accounts the organisation trusts (e.g. a security tooling account).
+    trusted_account_ids: set[str] = field(default_factory=set)
+
     # Overrides and switches
     disabled_rules: set[str] = field(default_factory=set)
     severity_overrides: dict[str, Severity] = field(default_factory=dict)
 
     # Posture gate: a confirmed FAIL on any of these rules forces overall FAIL.
-    gate_rules: set[str] = field(default_factory=lambda: {"SEC-S3-003"})
+    gate_rules: set[str] = field(default_factory=lambda: {"SEC-S3-003", "IAM-ROOT-002", "IAM-ROLE-001"})
 
     def environment_of(self, tags: dict[str, str] | None) -> str | None:
         """Return 'production', 'non_production', or None when it can't be determined."""
