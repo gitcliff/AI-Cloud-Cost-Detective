@@ -1,0 +1,144 @@
+[
+  {
+    "actual_monthly_cost": "$10.00/mo",
+    "assumptions": [
+      "Volume is unattached and can be safely deleted or snapshotted"
+    ],
+    "calculation_method": "deterministic",
+    "confidence": "high",
+    "estimated_monthly_savings": "$10.00/mo",
+    "explanation": "",
+    "fix_command": "",
+    "issue_type": "unused",
+    "resource_id": "vol-unattached01",
+    "resource_name": "orphan-volume",
+    "resource_type": "ebs",
+    "savings_formula": "100 GB x $0.1/GB (gp2) = $10.00/mo",
+    "severity": "medium"
+  },
+  {
+    "actual_monthly_cost": "$5.00/mo",
+    "assumptions": [
+      "Workload needs <= 3,000 baseline IOPS (gp3 default)",
+      "Workload needs <= 125 MB/s throughput (gp3 default)"
+    ],
+    "calculation_method": "deterministic",
+    "confidence": "high",
+    "estimated_monthly_savings": "$1.00/mo",
+    "explanation": "",
+    "fix_command": "",
+    "issue_type": "old_generation",
+    "resource_id": "vol-gp2attached",
+    "resource_name": "stopped-root",
+    "resource_type": "ebs",
+    "savings_formula": "50 GB x ($0.1 - $0.08)/GB = $1.00/mo",
+    "severity": "low"
+  },
+  {
+    "actual_monthly_cost": "$3.60/mo",
+    "assumptions": [
+      "Elastic IP is not associated to any running instance"
+    ],
+    "calculation_method": "deterministic",
+    "confidence": "high",
+    "estimated_monthly_savings": "$3.60/mo",
+    "explanation": "",
+    "fix_command": "",
+    "issue_type": "unused",
+    "resource_id": "eipalloc-unused01",
+    "resource_name": "203.0.113.10",
+    "resource_type": "eip",
+    "savings_formula": "Fixed charge: $3.6/mo per unassociated EIP",
+    "severity": "low"
+  },
+  {
+    "actual_monthly_cost": "$32.85/mo",
+    "assumptions": [
+      "NAT Gateway had zero bytes out in the last 7 days",
+      "No workloads depend on this NAT Gateway"
+    ],
+    "calculation_method": "deterministic",
+    "confidence": "high",
+    "estimated_monthly_savings": "$32.85/mo",
+    "explanation": "",
+    "fix_command": "",
+    "issue_type": "unused",
+    "resource_id": "nat-idle01",
+    "resource_name": "",
+    "resource_type": "nat_gateway",
+    "savings_formula": "$0.045/hr x 730 hrs = $32.85/mo",
+    "severity": "medium"
+  },
+  {
+    "actual_monthly_cost": "$16.43/mo",
+    "assumptions": [
+      "Load balancer has no healthy targets",
+      "No active traffic is being served"
+    ],
+    "calculation_method": "deterministic",
+    "confidence": "high",
+    "estimated_monthly_savings": "$16.43/mo",
+    "explanation": "",
+    "fix_command": "",
+    "issue_type": "unused",
+    "resource_id": "idle-alb",
+    "resource_name": "idle-alb",
+    "resource_type": "elb",
+    "savings_formula": "$0.0225/hr x 730 hrs = $16.43/mo (fixed charge, application)",
+    "severity": "medium"
+  },
+  {
+    "actual_monthly_cost": null,
+    "assumptions": [
+      "Lambda charges per invocation \u2014 zero invocations means zero Lambda cost",
+      "There may be minor CloudWatch Logs storage costs not captured here"
+    ],
+    "calculation_method": "deterministic",
+    "confidence": "high",
+    "estimated_monthly_savings": "$0.00/mo",
+    "explanation": "",
+    "fix_command": "",
+    "issue_type": "unused",
+    "resource_id": "dead-function",
+    "resource_name": "dead-function",
+    "resource_type": "lambda",
+    "savings_formula": "0 invocations x $0.20/1M requests = $0.00/mo (informational)",
+    "severity": "low"
+  },
+  {
+    "actual_monthly_cost": "$5.00/mo",
+    "assumptions": [
+      "Instance has been stopped and is not needed",
+      "EBS volumes can be snapshotted and deleted"
+    ],
+    "calculation_method": "deterministic",
+    "confidence": "high",
+    "estimated_monthly_savings": "$5.00/mo",
+    "explanation": "",
+    "fix_command": "",
+    "issue_type": "unused",
+    "resource_id": "i-stopped001",
+    "resource_name": "stopped-dev-server",
+    "resource_type": "ec2",
+    "savings_formula": "Attached EBS: 50 GB gp2 = $5.00 = $5.00/mo",
+    "severity": "low"
+  },
+  {
+    "actual_monthly_cost": null,
+    "assumptions": [
+      "Multi-AZ adds ~100% cost premium",
+      "Could not retrieve exact pricing"
+    ],
+    "calculation_method": "deterministic",
+    "confidence": "low",
+    "estimated_monthly_savings": "$0.00/mo",
+    "explanation": "",
+    "fix_command": "",
+    "issue_type": "over_provisioned",
+    "resource_id": "dev-db-multi-az",
+    "resource_name": "dev-db-multi-az",
+    "resource_type": "rds",
+    "savings_formula": "Pricing unavailable for db.t3.medium postgres",
+    "severity": "low"
+  }
+]
