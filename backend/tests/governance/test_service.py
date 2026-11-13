@@ -38,6 +38,17 @@ def fake_store(monkeypatch):
         lambda pool, aid, status, account_pk=None: record("set_analysis_governance", aid, status),
     )
 
+    async def failing(pool, scan_id):
+        log.append(("get_failing_evaluations", (scan_id,)))
+        return [{"id": 1, "status": "fail", "rule_id": "R", "severity": "high", "kind": "confirmed"}]
+
+    monkeypatch.setattr(service.store, "get_failing_evaluations", failing)
+    monkeypatch.setattr(
+        service.store,
+        "save_explanations",
+        lambda pool, sid, expl, st, err: record("save_explanations", sid, expl, st),
+    )
+
     async def account(region):
         return "111122223333"
 
@@ -55,18 +66,73 @@ def _report():
     )
 
 
+async def _explainer(evals):
+    from governance.explain import ExplainResult
+
+    return ExplainResult(status="completed", explanations={e["id"]: "why it matters" for e in evals})
+
+
 async def test_successful_stage(fake_store):
+    summary = await service.execute_scan(
+        None,
+        11,
+        "us-east-1",
+        "111122223333",
+        True,
+        analysis_id=1,
+        runner=lambda *a, **k: _report(),
+        explainer=_explainer,
+    )
+    assert summary["status"] == "completed" and summary["ai_status"] == "completed"
+    names = [n for n, _ in fake_store]
+    assert names == ["complete_scan", "set_analysis_governance", "get_failing_evaluations", "save_explanations"]
+    assert fake_store[1][1] == (1, "completed")
+    assert fake_store[-1][1] == (11, {1: "why it matters"}, "completed")
+
+
+async def test_full_stage_order(fake_store, monkeypatch):
+    async def unavailable(evals):
+        from governance.explain import ExplainResult
+
+        return ExplainResult(status="unavailable", error="no key")
+
+    monkeypatch.setattr(service, "explain_evaluations", unavailable)
     summary = await service.run_governance_stage(None, 5, "us-east-1", analysis_id=1, runner=lambda *a, **k: _report())
     assert summary["status"] == "completed" and summary["scan_id"] == 11
-    names = [n for n, _ in fake_store]
-    assert names == [
+    assert [n for n, _ in fake_store][:4] == [
         "ensure_ambient_account",
         "create_scan",
         "set_analysis_governance",
         "complete_scan",
-        "set_analysis_governance",
     ]
-    assert fake_store[-1][1] == (1, "completed")
+
+
+async def test_explanation_failure_never_affects_scan_result(fake_store):
+    async def broken(evals):
+        raise RuntimeError("LLM SDK crashed")
+
+    summary = await service.execute_scan(
+        None,
+        11,
+        "us-east-1",
+        "111122223333",
+        True,
+        analysis_id=1,
+        runner=lambda *a, **k: _report(),
+        explainer=broken,
+    )
+    assert summary["status"] == "completed" and summary["ai_status"] == "failed"
+    assert ("set_analysis_governance", (1, "completed")) in fake_store
+    assert "save_explanations" not in [n for n, _ in fake_store]
+
+
+async def test_failed_scan_is_not_explained(fake_store):
+    def boom(*a, **k):
+        raise RuntimeError("engine exploded")
+
+    summary = await service.execute_scan(None, 11, "us-east-1", "111122223333", True, runner=boom, explainer=_explainer)
+    assert "ai_status" not in summary
+    assert "get_failing_evaluations" not in [n for n, _ in fake_store]
 
 
 async def test_engine_exception_is_recorded_not_raised(fake_store):
