@@ -61,8 +61,8 @@ Unlike tools that rely solely on AI guesses, Cloud Cost Detective calculates sav
 │         ▼                           ▼                                   │
 │  ┌──────────────────────────────────────────┐                           │
 │  │          PostgreSQL Database             |                           │
-│  │  users · analyses (JSONB) · gov scans   │                           │
-│  │  evaluations · exceptions · policies    │                           │
+│  │  users · analyses (JSONB) · gov scans    │                           │
+│  │  evaluations · exceptions · policies     │                           │
 │  └──────────────────────────────────────────┘                           │
 └─────────────────────────────────────────────────────────────────────────┘
                                 │
