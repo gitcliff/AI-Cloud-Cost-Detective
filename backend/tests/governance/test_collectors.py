@@ -165,8 +165,13 @@ def test_run_collectors_deadline_marks_timeout():
 
 
 def test_governance_package_makes_no_mutating_aws_calls():
-    """The governance engine must stay read-only."""
-    mutating = re.compile(r"\.(put|create|delete|update|modify|attach|detach|tag|untag|copy|enable|disable)_\w+\(")
+    """The governance engine must stay read-only towards AWS.
+
+    Calls on `asyncio` and on the governance `store` (our own PostgreSQL) are not AWS calls.
+    """
+    mutating = re.compile(
+        r"(?<!asyncio)(?<!store)\.(put|create|delete|update|modify|attach|detach|tag|untag|copy|enable|disable)_\w+\("
+    )
     root = Path(collectors.__file__).parent
     offenders = [
         f"{p.name}: {m.group(0)}" for p in root.rglob("*.py") for m in mutating.finditer(p.read_text(encoding="utf-8"))

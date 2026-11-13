@@ -19,34 +19,17 @@ async def create_pool() -> asyncpg.Pool:
 
 
 async def create_tables(pool: asyncpg.Pool) -> None:
-    """Create required tables if they don't already exist."""
+    """Bring the schema up to date by applying pending SQL migrations (backend/migrations)."""
+    from migrate import run_migrations
+
+    applied = await run_migrations(pool)
+    logger.info("Database schema up to date (applied now: %s)", ", ".join(applied) or "none")
+
+
+async def get_analysis_owner(pool: asyncpg.Pool, analysis_id: int) -> int | None:
+    """Return the user_id that owns an analysis, or None if it doesn't exist."""
     async with pool.acquire() as conn:
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS users (
-                id            SERIAL PRIMARY KEY,
-                email         VARCHAR(255) UNIQUE NOT NULL,
-                password_hash TEXT NOT NULL,
-                created_at    TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-            );
-        """)
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS analyses (
-                id                  SERIAL PRIMARY KEY,
-                user_id             INTEGER REFERENCES users(id) ON DELETE CASCADE,
-                aws_region          VARCHAR(50) NOT NULL,
-                resources_scanned   INTEGER NOT NULL DEFAULT 0,
-                issues_found        INTEGER NOT NULL DEFAULT 0,
-                estimated_savings   TEXT,
-                analysis_result     JSONB,
-                status              VARCHAR(20) DEFAULT 'pending',
-                created_at          TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-            );
-            CREATE INDEX IF NOT EXISTS idx_analyses_user_id
-                ON analyses(user_id);
-            CREATE INDEX IF NOT EXISTS idx_analyses_created_at
-                ON analyses(created_at DESC);
-        """)
-    logger.info("Database tables verified")
+        return await conn.fetchval("SELECT user_id FROM analyses WHERE id = $1", analysis_id)
 
 
 async def get_user_by_email(pool: asyncpg.Pool, email: str) -> dict | None:

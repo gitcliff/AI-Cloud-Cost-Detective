@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
-from ai_analyzer import analyze_aws_resources
+from ai_analyzer import analyze_aws_resources, build_deterministic_result
 from auth import create_token, decode_token_raw, get_current_user, hash_password, verify_password
 from aws_scanner import get_regions, scan_region
 from cost_explorer import fetch_cost_data, merge_costs_with_resources
@@ -18,10 +18,15 @@ from db import (
     create_tables,
     create_user,
     get_analysis_by_id,
+    get_analysis_owner,
     get_history,
     get_user_by_email,
     update_analysis,
 )
+from governance import service as governance_service
+from governance import store as governance_store
+from governance.api import router as governance_router
+from governance.rules import RULES as GOVERNANCE_RULES
 from models import (
     AnalyzeRequest,
     AnalyzeResponse,
@@ -48,6 +53,10 @@ async def lifespan(app: FastAPI):
     """Startup: create DB pool + tables. Shutdown: close pool."""
     app.state.db_pool = await create_pool()
     await create_tables(app.state.db_pool)
+    await governance_store.sync_rules(app.state.db_pool, GOVERNANCE_RULES)
+    interrupted = await governance_store.fail_interrupted_scans(app.state.db_pool)
+    if interrupted:
+        logger.warning("Marked %d governance scan(s) interrupted by restart as failed", interrupted)
     logger.info("Database initialized")
     yield
     await app.state.db_pool.close()
@@ -64,6 +73,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(governance_router)
+
 
 # ── Auth endpoints ──────────────────────────────────────────────────────────
 
@@ -71,6 +82,11 @@ app.add_middleware(
 @app.post("/api/auth/signup", response_model=AuthResponse)
 async def signup(request: SignupRequest):
     pool = app.state.db_pool
+
+    # Every user of a deployment scans the same server-side AWS account, so shared
+    # deployments should turn open sign-up off.
+    if os.getenv("ALLOW_SIGNUP", "true").strip().lower() == "false":
+        raise HTTPException(status_code=403, detail="Sign-up is disabled on this deployment")
 
     if not EMAIL_RE.match(request.email):
         raise HTTPException(status_code=400, detail="Invalid email address")
@@ -115,9 +131,24 @@ async def _push_progress(analysis_id: int, step: str, percent: int) -> None:
         await queue.put({"step": step, "percent": percent})
 
 
-async def _run_analysis(analysis_id: int, region: str, include_cost_data: bool = True) -> None:
-    """Background task: scan AWS, run AI analysis, store results."""
+async def _run_analysis(
+    analysis_id: int,
+    region: str,
+    include_cost_data: bool = True,
+    user_id: int | None = None,
+    include_governance: bool = False,
+) -> None:
+    """Background task: scan AWS, run AI analysis, store results.
+
+    The governance scan runs concurrently and independently: its failure is
+    recorded on the governance scan and never fails the cost analysis.
+    """
     pool = app.state.db_pool
+    governance_task = None
+    if include_governance and user_id is not None:
+        governance_task = governance_service.spawn(
+            governance_service.run_governance_stage(pool, user_id, region, analysis_id)
+        )
 
     try:
         await _push_progress(analysis_id, "Connecting to AWS region...", 5)
@@ -151,7 +182,17 @@ async def _run_analysis(analysis_id: int, region: str, include_cost_data: bool =
 
         # Send resources + pre-calculated issues to LLM for explanation
         await _push_progress(analysis_id, "Analyzing costs with AI...", 70)
-        result = await analyze_aws_resources(region, resources, cost_data, precalculated_issues)
+        try:
+            result = await analyze_aws_resources(region, resources, cost_data, precalculated_issues)
+        except Exception as ai_err:
+            # The LLM only explains; deterministic findings must survive its failure.
+            logger.warning("AI analysis unavailable for analysis %d: %s", analysis_id, ai_err)
+            await _push_progress(analysis_id, "AI unavailable, saving deterministic results...", 80)
+            result = build_deterministic_result(region, resources, cost_data, precalculated_issues, str(ai_err))
+
+        if governance_task is not None:
+            await _push_progress(analysis_id, "Finishing governance evaluation...", 85)
+            result["governance"] = await governance_task
 
         # Step 6 — Store results in PostgreSQL
         await _push_progress(analysis_id, "Storing results...", 90)
@@ -177,6 +218,8 @@ async def _run_analysis(analysis_id: int, region: str, include_cost_data: bool =
         await _push_progress(analysis_id, f"Analysis failed: {e}", -1)
 
     finally:
+        if governance_task is not None and not governance_task.done():
+            await governance_task  # never raises; let it record its own outcome
         # Clean up the queue after a short delay so the client can read the final message
         await asyncio.sleep(2)
         progress_queues.pop(analysis_id, None)
@@ -201,8 +244,17 @@ async def analyze(request: AnalyzeRequest, user_id: int = Depends(get_current_us
     # Set up a progress queue before launching the background task
     progress_queues[analysis_id] = asyncio.Queue()
 
-    # Launch analysis in the background so the endpoint returns immediately
-    asyncio.create_task(_run_analysis(analysis_id, request.region, request.include_cost_data))
+    # Launch analysis in the background so the endpoint returns immediately.
+    # spawn() keeps a reference so the task can't be garbage-collected mid-run.
+    governance_service.spawn(
+        _run_analysis(
+            analysis_id,
+            request.region,
+            request.include_cost_data,
+            user_id=user_id,
+            include_governance=request.include_governance,
+        )
+    )
 
     return AnalyzeResponse(analysis_id=analysis_id)
 
@@ -225,7 +277,10 @@ async def websocket_progress(
 
     await websocket.accept()
 
-    queue = progress_queues.get(analysis_id)
+    # Only the analysis owner may follow its progress. Answer exactly as for a
+    # missing analysis so other users' analysis IDs aren't revealed.
+    owner = await get_analysis_owner(app.state.db_pool, analysis_id)
+    queue = progress_queues.get(analysis_id) if owner == user_id else None
     if not queue:
         await websocket.send_json({"step": "No active analysis found", "percent": -1})
         await websocket.close()
