@@ -112,6 +112,92 @@ RUNTIME_POLICY = parse_runtime_policy(
 )
 
 
+ACCOUNT = "111122223333"
+READ_ONLY_ARN = "arn:aws:iam::aws:policy/ReadOnlyAccess"
+ADMIN_ARN = "arn:aws:iam::aws:policy/AdministratorAccess"
+ADMIN_DOC = {"Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Action": "*", "Resource": "*"}]}
+READ_DOC = {"Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Action": ["s3:Get*"], "Resource": "*"}]}
+
+
+def cred_row(user="alice", **overrides):
+    row = {
+        "user": user,
+        "arn": f"arn:aws:iam::{ACCOUNT}:user/{user}",
+        "user_creation_time": "2024-01-01T00:00:00+00:00",
+        "password_enabled": "true",
+        "password_last_used": "2026-11-01T00:00:00+00:00",
+        "mfa_active": "true",
+        "access_key_1_active": "true",
+        "access_key_1_last_rotated": "2026-10-14T00:00:00+00:00",
+        "access_key_1_last_used_date": "2026-11-11T00:00:00+00:00",
+        "access_key_2_active": "false",
+        "access_key_2_last_rotated": "N/A",
+        "access_key_2_last_used_date": "N/A",
+    }
+    row.update(overrides)
+    return row
+
+
+def iam_user(name="alice", groups=None, attached=None, inline=None):
+    return {
+        "user_name": name,
+        "arn": f"arn:aws:iam::{ACCOUNT}:user/{name}",
+        "groups": groups or [],
+        "attached": attached or [],
+        "inline": inline or {},
+    }
+
+
+def iam_role(name="app", trust=None, path="/", attached=None, inline=None):
+    return {
+        "role_name": name,
+        "arn": f"arn:aws:iam::{ACCOUNT}:role{path}{name}",
+        "path": path,
+        "trust": trust
+        if trust is not None
+        else {
+            "Statement": [
+                {"Effect": "Allow", "Principal": {"Service": "ec2.amazonaws.com"}, "Action": "sts:AssumeRole"}
+            ]
+        },
+        "attached": attached or [],
+        "inline": inline or {},
+        "last_used": None,
+    }
+
+
+def auth_details(users=None, groups=None, roles=None, policies=None):
+    base_policies = {
+        READ_ONLY_ARN: {"name": "ReadOnlyAccess", "aws_managed": True, "attachment_count": 1, "document": READ_DOC},
+        f"arn:aws:iam::{ACCOUNT}:policy/app-read": {
+            "name": "app-read",
+            "aws_managed": False,
+            "attachment_count": 1,
+            "document": READ_DOC,
+        },
+    }
+    base_policies.update(policies or {})
+    return {
+        "users": users if users is not None else [iam_user(groups=["devs"], attached=[READ_ONLY_ARN])],
+        "groups": groups if groups is not None else {"devs": {"arn": "arn:group/devs", "attached": [], "inline": {}}},
+        "roles": roles if roles is not None else [iam_role()],
+        "policies": base_policies,
+    }
+
+
+def healthy_iam_snapshot():
+    return {
+        "iam_credential_report": ok(
+            "iam_credential_report", [cred_row("<root_account>", arn=f"arn:aws:iam::{ACCOUNT}:root"), cred_row()]
+        ),
+        "iam_authorization_details": ok("iam_authorization_details", [auth_details()]),
+        "iam_password_policy": ok(
+            "iam_password_policy", [{"policy": {"MinimumPasswordLength": 14, "PasswordReusePrevention": 24}}]
+        ),
+        "iam_account_summary": ok("iam_account_summary", [{"AccountMFAEnabled": 1, "AccountAccessKeysPresent": 0}]),
+    }
+
+
 @pytest.fixture
 def ctx():
     return EvalContext(account_id="111122223333", region="us-east-1", today=TODAY, runtime_policy=RUNTIME_POLICY)

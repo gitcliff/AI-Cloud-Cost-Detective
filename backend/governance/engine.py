@@ -14,6 +14,7 @@ import boto3
 
 from governance.aws_client import client
 from governance.collectors import COLLECTORS, CollectorFunc, run_collectors
+from governance.iam_collectors import IAM_COLLECTORS
 from governance.models import (
     COLLECTOR_TO_UNKNOWN,
     CollectorResult,
@@ -26,7 +27,7 @@ from governance.models import (
     UnknownReason,
 )
 from governance.policy import GovernancePolicy
-from governance.rules import RULES
+from governance.rules import IAM_RULES, REGIONAL_RULES, RULES
 from governance.runtime_policy import RuntimePolicy, load_runtime_policy
 from governance.scoring import Posture, compute_posture
 
@@ -100,7 +101,7 @@ def evaluate(
                 scope=spec.scope,
                 severity=severity,
                 account_id=ctx.account_id,
-                region=ctx.region,
+                region=None if spec.global_resource else ctx.region,
                 resource_type=out.resource_type or spec.resource_type,
                 resource_id=out.resource_id,
                 resource_name=out.resource_name,
@@ -153,19 +154,30 @@ def run_governance(
     runtime_policy: RuntimePolicy | None = None,
     collectors: dict[str, CollectorFunc] | None = None,
     deadline_seconds: float = 120.0,
+    include_regional: bool = True,
+    include_iam: bool = True,
 ) -> GovernanceReport:
-    """Collect from AWS (read-only), evaluate all rules, and score. Synchronous;
-    call from a worker thread in async code."""
+    """Collect from AWS (read-only), evaluate rules, and score. Synchronous;
+    call from a worker thread in async code.
+
+    IAM is account-global: when scanning several regions, pass include_iam=True
+    for exactly one of them.
+    """
     session = session or boto3.Session(region_name=region)
     policy = policy or GovernancePolicy()
     if account_id is None:
         account_id = client(session, "sts", region).get_caller_identity()["Account"]
 
+    rules = (REGIONAL_RULES if include_regional else ()) + (IAM_RULES if include_iam else ())
+    registry = collectors or {**COLLECTORS, **IAM_COLLECTORS}
+    wanted = (list(COLLECTORS) if include_regional else []) + (list(IAM_COLLECTORS) if include_iam else [])
+    # Collectors absent from the registry are simply not run; dependent rules report UNKNOWN.
     snapshot = run_collectors(
         session,
         region,
         account_id,
-        collectors=collectors or COLLECTORS,
+        names=[n for n in wanted if n in registry],
+        collectors=registry,
         timeout_seconds=deadline_seconds,
     )
     now = datetime.now(UTC)
@@ -175,7 +187,7 @@ def run_governance(
         today=today or now.date(),
         runtime_policy=runtime_policy or load_runtime_policy(),
     )
-    evaluations = evaluate(snapshot, policy, ctx, evaluated_at=now)
+    evaluations = evaluate(snapshot, policy, ctx, rules=rules, evaluated_at=now)
     posture = compute_posture(evaluations, gate_rules=policy.gate_rules)
     return GovernanceReport(
         account_id=account_id,
@@ -192,5 +204,5 @@ def run_governance(
             }
             for n, r in snapshot.items()
         },
-        rule_versions={r.rule_id: r.version for r in RULES},
+        rule_versions={r.rule_id: r.version for r in rules},
     )

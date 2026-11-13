@@ -131,6 +131,7 @@ class RuleSpec:
     func: RuleFunc
     remediation_ref: str | None = None
     description: str = ""
+    global_resource: bool = False  # account-global (e.g. IAM): evaluations carry region=None
 
 
 @dataclass

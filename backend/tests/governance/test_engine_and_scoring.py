@@ -4,7 +4,9 @@ from datetime import UTC, datetime
 
 import pytest
 
+from governance.collectors import COLLECTORS
 from governance.engine import evaluate, run_governance
+from governance.iam_collectors import IAM_COLLECTORS
 from governance.models import (
     Category,
     CollectorStatus,
@@ -15,20 +17,21 @@ from governance.models import (
     Status,
     UnknownReason,
 )
-from governance.rules import RULES, RULES_BY_ID
+from governance.rules import REGIONAL_RULES, RULES, RULES_BY_ID
 from governance.scoring import OverallStatus, compute_posture
-from tests.governance.conftest import RUNTIME_POLICY, TODAY, bucket, failed, fld, ok, rds
-
-ALL_COLLECTORS = (
-    "ec2_instances",
-    "ebs_volumes",
-    "ebs_default_encryption",
-    "rds_instances",
-    "vpc_network",
-    "s3_buckets",
-    "s3_account_pab",
-    "lambda_functions",
+from tests.governance.conftest import (
+    RUNTIME_POLICY,
+    TODAY,
+    bucket,
+    failed,
+    fld,
+    healthy_iam_snapshot,
+    ok,
+    rds,
 )
+
+REGIONAL_COLLECTORS = tuple(COLLECTORS)
+ALL_COLLECTORS = REGIONAL_COLLECTORS + tuple(IAM_COLLECTORS)
 
 
 def healthy_snapshot():
@@ -55,14 +58,22 @@ def healthy_snapshot():
         "lambda_functions": ok(
             "lambda_functions", [{"function_name": "f", "runtime": "python3.12", "package_type": "Zip"}]
         ),
+        **healthy_iam_snapshot(),
     }
 
 
 class TestEngineInvariants:
     def test_healthy_account_has_no_failures_or_unknowns(self, policy, ctx):
         evals = evaluate(healthy_snapshot(), policy, ctx)
-        assert {e.status for e in evals} <= {Status.PASS, Status.NOT_APPLICABLE}
+        assert {e.status for e in evals} <= {Status.PASS, Status.NOT_APPLICABLE}, [
+            (e.rule_id, e.status, e.message) for e in evals if e.status not in (Status.PASS, Status.NOT_APPLICABLE)
+        ]
         assert {e.rule_id for e in evals} == set(RULES_BY_ID)
+
+    def test_iam_evaluations_are_account_global(self, policy, ctx):
+        evals = evaluate(healthy_snapshot(), policy, ctx)
+        assert {e.region for e in evals if e.rule_id.startswith("IAM-")} == {None}
+        assert {e.region for e in evals if not e.rule_id.startswith("IAM-")} == {"us-east-1"}
 
     @pytest.mark.parametrize("broken", ALL_COLLECTORS)
     @pytest.mark.parametrize("status", [CollectorStatus.ACCESS_DENIED, CollectorStatus.ERROR, CollectorStatus.TIMEOUT])
@@ -91,8 +102,8 @@ class TestEngineInvariants:
         assert any(e.rule_id == "SEC-RDS-001" and e.status == Status.PASS for e in evals)
 
     def test_empty_inventory_produces_no_resource_evaluations(self, policy, ctx):
-        snap = {name: ok(name, []) for name in ALL_COLLECTORS}
-        evals = evaluate(snap, policy, ctx)
+        snap = {name: ok(name, []) for name in REGIONAL_COLLECTORS}
+        evals = evaluate(snap, policy, ctx, rules=REGIONAL_RULES)
         assert all(e.rule_id in ("SEC-EBS-002", "SEC-S3-005", "TAG-001", "TAG-002", "OPS-RDS-002") for e in evals)
 
     def test_disabled_rule_and_severity_override(self, policy, ctx):

@@ -4,9 +4,9 @@ so stored historical results stay interpretable."""
 from __future__ import annotations
 
 from governance.models import Category, RuleSpec, Scope, Severity
-from governance.rules import operations, security, tagging
+from governance.rules import iam, operations, security, tagging
 
-RULES: tuple[RuleSpec, ...] = (
+REGIONAL_RULES: tuple[RuleSpec, ...] = (
     RuleSpec(
         rule_id="SEC-RDS-001",
         version=1,
@@ -155,6 +155,154 @@ RULES: tuple[RuleSpec, ...] = (
     ),
 )
 
+
+def _iam(rule_id, name, severity, scope, resource_type, requires, func, remediation_ref, description=""):
+    return RuleSpec(
+        rule_id=rule_id,
+        version=1,
+        name=name,
+        category=Category.IAM,
+        default_severity=severity,
+        scope=scope,
+        resource_type=resource_type,
+        requires=requires,
+        func=func,
+        remediation_ref=remediation_ref,
+        description=description,
+        global_resource=True,
+    )
+
+
+_CRED = ("iam_credential_report",)
+_AUTH = ("iam_authorization_details",)
+_SUMMARY = ("iam_account_summary",)
+_PWD = ("iam_password_policy",)
+
+IAM_RULES: tuple[RuleSpec, ...] = (
+    _iam(
+        "IAM-ROOT-001",
+        "Root user without MFA",
+        Severity.HIGH,
+        Scope.ACCOUNT,
+        "iam_root",
+        _SUMMARY,
+        iam.root_mfa,
+        "iam-root-enable-mfa",
+    ),
+    _iam(
+        "IAM-ROOT-002",
+        "Root user has access keys",
+        Severity.HIGH,
+        Scope.ACCOUNT,
+        "iam_root",
+        _SUMMARY,
+        iam.root_access_keys,
+        "iam-root-delete-access-keys",
+    ),
+    _iam(
+        "IAM-USR-001",
+        "Console user without MFA",
+        Severity.HIGH,
+        Scope.RESOURCE,
+        "iam_user",
+        _CRED,
+        iam.console_user_without_mfa,
+        "iam-user-enable-mfa",
+    ),
+    _iam(
+        "IAM-USR-002",
+        "Active access key unused",
+        Severity.MEDIUM,
+        Scope.RESOURCE,
+        "iam_access_key",
+        _CRED,
+        iam.access_key_unused,
+        "iam-deactivate-unused-key",
+    ),
+    _iam(
+        "IAM-USR-003",
+        "Access key older than rotation threshold",
+        Severity.LOW,
+        Scope.RESOURCE,
+        "iam_access_key",
+        _CRED,
+        iam.access_key_age,
+        "iam-rotate-access-key",
+    ),
+    _iam(
+        "IAM-USR-004",
+        "User admin-equivalent via direct policies",
+        Severity.HIGH,
+        Scope.RESOURCE,
+        "iam_user",
+        _AUTH,
+        iam.user_admin_direct,
+        "iam-review-admin-access",
+    ),
+    _iam(
+        "IAM-USR-005",
+        "User admin-equivalent via group membership",
+        Severity.HIGH,
+        Scope.RESOURCE,
+        "iam_user",
+        _AUTH,
+        iam.user_admin_via_group,
+        "iam-review-admin-access",
+    ),
+    _iam(
+        "IAM-POL-001",
+        "Policy grants Action * on Resource *",
+        Severity.HIGH,
+        Scope.RESOURCE,
+        "iam_policy",
+        _AUTH,
+        iam.admin_policies,
+        "iam-scope-down-policy",
+    ),
+    _iam(
+        "IAM-ROLE-001",
+        "Role trust policy allows any principal",
+        Severity.HIGH,
+        Scope.RESOURCE,
+        "iam_role",
+        _AUTH,
+        iam.role_trust_wildcard,
+        "iam-restrict-trust-policy",
+    ),
+    _iam(
+        "IAM-ROLE-002",
+        "Role trusts external account without conditions",
+        Severity.MEDIUM,
+        Scope.RESOURCE,
+        "iam_role",
+        _AUTH,
+        iam.role_trust_external_account,
+        "iam-add-external-id",
+        "Cross-account trust is often legitimate; reported as potential unless conditioned or allow-listed.",
+    ),
+    _iam(
+        "IAM-ACCT-001",
+        "No account password policy",
+        Severity.MEDIUM,
+        Scope.ACCOUNT,
+        "iam_password_policy",
+        _PWD,
+        iam.password_policy_missing,
+        "iam-set-password-policy",
+    ),
+    _iam(
+        "IAM-ACCT-002",
+        "Weak account password policy",
+        Severity.LOW,
+        Scope.ACCOUNT,
+        "iam_password_policy",
+        _PWD,
+        iam.password_policy_weak,
+        "iam-set-password-policy",
+    ),
+)
+
+RULES: tuple[RuleSpec, ...] = REGIONAL_RULES + IAM_RULES
 RULES_BY_ID = {r.rule_id: r for r in RULES}
 if len(RULES_BY_ID) != len(RULES):
     raise RuntimeError("duplicate rule_id in governance rule registry")
