@@ -159,9 +159,15 @@ async def test_scan_lifecycle_and_evaluation_queries(pool):
     assert items[0]["evidence"]["encrypted"] is False
 
     page1, cursor = await store.list_evaluations(pool, uid, scan_id, limit=4)
-    page2, cursor2 = await store.list_evaluations(pool, uid, scan_id, limit=4, after_id=cursor)
+    page2, cursor2 = await store.list_evaluations(pool, uid, scan_id, limit=4, after=cursor)
     assert len(page1) == 4 and len(page2) == 2 and cursor2 is None
     assert {i["id"] for i in page1}.isdisjoint({i["id"] for i in page2})
+    # Most severe first across pages: the single high finding leads, then medium, then low.
+    order = [i["severity"] for i in page1 + page2]
+    rank = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
+    assert order[0] == "high" and order == sorted(order, key=rank.__getitem__)
+    with pytest.raises(ValueError):
+        await store.list_evaluations(pool, uid, scan_id, after="nope")
 
     (high,) = (await store.list_evaluations(pool, uid, scan_id, severity="high"))[0]
     assert high["resource_id"] == "vol-1"
@@ -302,6 +308,8 @@ async def test_tenant_isolation_http(pool):
         assert (await client.get("/api/governance/remediations/nope", headers=hdr(bob))).status_code == 404
 
         r = await client.get(f"/api/governance/scans/{scan_id}/evaluations?status=bogus", headers=hdr(alice))
+        assert r.status_code == 422
+        r = await client.get(f"/api/governance/scans/{scan_id}/evaluations?cursor=1;drop", headers=hdr(alice))
         assert r.status_code == 422
         r = await client.post("/api/governance/scans", json={"region": "mars-1"}, headers=hdr(alice))
         assert r.status_code == 400

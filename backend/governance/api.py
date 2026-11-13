@@ -102,10 +102,11 @@ async def list_evaluations(
     severity: SeverityFilter | None = None,
     category: CategoryFilter | None = None,
     kind: KindFilter | None = None,
-    cursor: int | None = Query(default=None, ge=0),
+    cursor: str | None = Query(default=None, pattern=r"^\d{1,2}:\d{1,18}$"),
     limit: int = Query(default=100, ge=1, le=500),
     user_id: int = Depends(get_current_user),
 ):
+    """Evaluations ordered most severe first. Pass `next_cursor` back as `cursor` for the next page."""
     result = await store.list_evaluations(
         _pool(request),
         user_id,
@@ -114,7 +115,7 @@ async def list_evaluations(
         severity=severity,
         category=category,
         kind=kind,
-        after_id=cursor,
+        after=cursor,
         limit=limit,
     )
     if result is None:
