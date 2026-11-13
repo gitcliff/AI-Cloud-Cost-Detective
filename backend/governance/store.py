@@ -320,6 +320,11 @@ async def get_scan_for_analysis(pool: asyncpg.Pool, user_id: int, analysis_id: i
     return _scan(row) if row else None
 
 
+_SEVERITY_RANK_SQL = (
+    "CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END"
+)
+
+
 async def list_evaluations(
     pool: asyncpg.Pool,
     user_id: int,
@@ -329,10 +334,20 @@ async def list_evaluations(
     severity: str | None = None,
     category: str | None = None,
     kind: str | None = None,
-    after_id: int | None = None,
+    after: str | None = None,
     limit: int = 100,
-) -> tuple[list[dict], int | None] | None:
-    """Keyset-paginated evaluations. Returns None if the caller doesn't own the scan."""
+) -> tuple[list[dict], str | None] | None:
+    """Evaluations ordered most severe first, keyset-paginated.
+
+    The cursor is "<severity rank>:<id>" of the last row returned. Returns None if
+    the caller doesn't own the scan; raises ValueError for a malformed cursor.
+    """
+    after_rank = after_id = None
+    if after is not None:
+        rank_text, _, id_text = after.partition(":")
+        if not (rank_text.isdigit() and id_text.isdigit()):
+            raise ValueError("invalid cursor")
+        after_rank, after_id = int(rank_text), int(id_text)
     async with pool.acquire() as conn:
         owned = await conn.fetchval(
             """
@@ -345,33 +360,41 @@ async def list_evaluations(
         if not owned:
             return None
         rows = await conn.fetch(
-            """
-            SELECT * FROM governance_evaluations
-             WHERE scan_id = $1
-               AND ($2::text IS NULL OR status = $2)
-               AND ($3::text IS NULL OR severity = $3)
-               AND ($4::text IS NULL OR category = $4)
-               AND ($5::text IS NULL OR kind = $5)
-               AND ($6::bigint IS NULL OR id > $6)
-             ORDER BY id
-             LIMIT $7
-            """,
+            f"""
+            SELECT * FROM (
+                SELECT e.*, {_SEVERITY_RANK_SQL} AS severity_rank
+                  FROM governance_evaluations e
+                 WHERE scan_id = $1
+                   AND ($2::text IS NULL OR status = $2)
+                   AND ($3::text IS NULL OR severity = $3)
+                   AND ($4::text IS NULL OR category = $4)
+                   AND ($5::text IS NULL OR kind = $5)
+            ) ranked
+             WHERE ($6::int IS NULL OR (severity_rank, id) > ($6, $7::bigint))
+             ORDER BY severity_rank, id
+             LIMIT $8
+            """,  # noqa: S608 - _SEVERITY_RANK_SQL is a constant
             scan_id,
             status,
             severity,
             category,
             kind,
+            after_rank,
             after_id,
             limit + 1,
         )
+    hidden = ("scan_id", "evidence", "details", "evaluated_at", "severity_rank")
     items = [
         {
-            **{k: v for k, v in dict(r).items() if k not in ("scan_id", "evidence", "details", "evaluated_at")},
+            **{k: v for k, v in dict(r).items() if k not in hidden},
             "evidence": _json(r["evidence"]),
             "details": _json(r["details"]),
             "evaluated_at": _iso(r["evaluated_at"]),
         }
         for r in rows[:limit]
     ]
-    next_cursor = items[-1]["id"] if len(rows) > limit else None
+    next_cursor = None
+    if len(rows) > limit:
+        last = rows[limit - 1]
+        next_cursor = f"{last['severity_rank']}:{last['id']}"
     return items, next_cursor

@@ -1,7 +1,10 @@
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useParams, useSearchParams } from "react-router-dom";
 import api from "../api/client";
+import GovernancePanel from "../components/governance/GovernancePanel";
 import type { AnalysisResult, Issue } from "../types";
+
+type ReportTab = "cost" | "governance";
 
 function severityColor(severity: string) {
   switch (severity) {
@@ -212,6 +215,8 @@ function ServiceBreakdown({ breakdown }: { breakdown: Record<string, number> }) 
 
 export default function Report() {
   const { analysisId } = useParams<{ analysisId: string }>();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tab: ReportTab = searchParams.get("tab") === "governance" ? "governance" : "cost";
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -261,112 +266,151 @@ export default function Report() {
         Region: {result.region} &middot; {new Date(result.created_at).toLocaleDateString()}
       </p>
 
-      {/* Summary cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-4 mb-6">
-        <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
-          <p className="text-xs text-gray-500 mb-1">Resources Scanned</p>
-          <p className="text-xl font-bold">{result.resources_scanned}</p>
-        </div>
-        <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
-          <p className="text-xs text-gray-500 mb-1">Issues Found</p>
-          <p className="text-xl font-bold">{result.issues_found}</p>
-        </div>
-        <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
-          <p className="text-xs text-gray-500 mb-1">Actual Monthly Cost</p>
-          {result.actual_total_monthly_cost ? (
-            <p className="text-xl font-bold text-blue-400">{result.actual_total_monthly_cost}</p>
-          ) : (
-            <p className="text-xl font-bold text-gray-600">N/A</p>
-          )}
-          {result.cost_summary?.available && (
-            <p className="text-[10px] text-gray-600 mt-0.5">via Cost Explorer</p>
-          )}
-        </div>
-        <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
-          <p className="text-xs text-gray-500 mb-1">Verified Savings</p>
-          <p className="text-xl font-bold text-green-400">
-            $
-            {verifiedSavings.toLocaleString(undefined, {
-              minimumFractionDigits: 2,
-              maximumFractionDigits: 2,
-            })}
-            /mo
-          </p>
-          <p className="text-[10px] text-gray-600 mt-0.5">high + medium confidence</p>
-        </div>
-        <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
-          <p className="text-xs text-gray-500 mb-1">AI Estimated Savings</p>
-          {aiEstimatedSavings > 0 ? (
-            <p className="text-xl font-bold text-gray-400">
-              $
-              {aiEstimatedSavings.toLocaleString(undefined, {
-                minimumFractionDigits: 2,
-                maximumFractionDigits: 2,
-              })}
-              /mo
-            </p>
-          ) : (
-            <p className="text-xl font-bold text-gray-600">$0.00/mo</p>
-          )}
-          <p className="text-[10px] text-gray-600 mt-0.5">low confidence</p>
-        </div>
+      <div className="flex gap-1 border-b border-gray-800 mb-6" role="tablist">
+        {(
+          [
+            ["cost", "Cost Optimization"],
+            ["governance", "Governance & Security"],
+          ] as [ReportTab, string][]
+        ).map(([key, label]) => (
+          <button
+            key={key}
+            type="button"
+            role="tab"
+            aria-selected={tab === key}
+            onClick={() => setSearchParams(key === "cost" ? {} : { tab: key }, { replace: true })}
+            className={`px-4 py-2 text-sm -mb-px border-b-2 transition-colors ${
+              tab === key
+                ? "border-blue-500 text-white"
+                : "border-transparent text-gray-500 hover:text-gray-300"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
       </div>
 
-      {/* Severity + total row */}
-      <div className="flex items-center gap-4 mb-6 text-sm">
-        <span className="text-gray-500">Severity:</span>
-        {highCount > 0 && (
-          <span className="px-2 py-0.5 rounded text-xs bg-red-900 text-red-200">
-            {highCount} High
-          </span>
-        )}
-        {medCount > 0 && (
-          <span className="px-2 py-0.5 rounded text-xs bg-amber-900 text-amber-200">
-            {medCount} Med
-          </span>
-        )}
-        {lowCount > 0 && (
-          <span className="px-2 py-0.5 rounded text-xs bg-emerald-900 text-emerald-200">
-            {lowCount} Low
-          </span>
-        )}
-        <span className="ml-auto text-gray-500">
-          Total:{" "}
-          <span className="text-green-400 font-semibold">{result.estimated_total_savings}</span>
-        </span>
-      </div>
-
-      {/* Cost Explorer info banner */}
-      {result.cost_summary && !result.cost_summary.available && (
-        <div className="bg-blue-900/20 border border-blue-800/50 text-blue-300 text-xs rounded px-4 py-2 mb-4">
-          Cost Explorer data was not available for this analysis.
-          {result.cost_summary.error && (
-            <span className="text-blue-400"> ({result.cost_summary.error})</span>
-          )}
-        </div>
-      )}
-
-      {/* Cost by Service breakdown */}
-      {result.cost_summary?.available && result.cost_summary.service_breakdown && (
-        <ServiceBreakdown breakdown={result.cost_summary.service_breakdown} />
-      )}
-
-      {/* Summary text */}
-      <div className="bg-gray-900 border border-gray-800 rounded-lg p-4 mb-6">
-        <h2 className="text-sm font-medium text-gray-400 mb-2">Summary</h2>
-        <p className="text-sm text-gray-300">{result.summary}</p>
-      </div>
-
-      {/* Issues list */}
-      <h2 className="text-lg font-semibold mb-4">Issues ({result.issues.length})</h2>
-      {result.issues.length === 0 ? (
-        <p className="text-gray-500 text-sm">No cost issues found in this region.</p>
+      {tab === "governance" ? (
+        <GovernancePanel analysisId={analysisId!} />
       ) : (
-        <div className="space-y-4">
-          {result.issues.map((issue, i) => (
-            <IssueCard key={i} issue={issue} />
-          ))}
-        </div>
+        <>
+          {result.ai_status === "unavailable" && (
+            <div className="bg-amber-900/20 border border-amber-800/50 text-amber-200 text-xs rounded px-4 py-2 mb-4">
+              AI explanations were unavailable for this analysis. Findings and savings come from the
+              deterministic pricing engine and are unaffected.
+            </div>
+          )}
+
+          {/* Summary cards */}
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-4 mb-6">
+            <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
+              <p className="text-xs text-gray-500 mb-1">Resources Scanned</p>
+              <p className="text-xl font-bold">{result.resources_scanned}</p>
+            </div>
+            <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
+              <p className="text-xs text-gray-500 mb-1">Issues Found</p>
+              <p className="text-xl font-bold">{result.issues_found}</p>
+            </div>
+            <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
+              <p className="text-xs text-gray-500 mb-1">Actual Monthly Cost</p>
+              {result.actual_total_monthly_cost ? (
+                <p className="text-xl font-bold text-blue-400">
+                  {result.actual_total_monthly_cost}
+                </p>
+              ) : (
+                <p className="text-xl font-bold text-gray-600">N/A</p>
+              )}
+              {result.cost_summary?.available && (
+                <p className="text-[10px] text-gray-600 mt-0.5">via Cost Explorer</p>
+              )}
+            </div>
+            <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
+              <p className="text-xs text-gray-500 mb-1">Verified Savings</p>
+              <p className="text-xl font-bold text-green-400">
+                $
+                {verifiedSavings.toLocaleString(undefined, {
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2,
+                })}
+                /mo
+              </p>
+              <p className="text-[10px] text-gray-600 mt-0.5">high + medium confidence</p>
+            </div>
+            <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
+              <p className="text-xs text-gray-500 mb-1">AI Estimated Savings</p>
+              {aiEstimatedSavings > 0 ? (
+                <p className="text-xl font-bold text-gray-400">
+                  $
+                  {aiEstimatedSavings.toLocaleString(undefined, {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
+                  })}
+                  /mo
+                </p>
+              ) : (
+                <p className="text-xl font-bold text-gray-600">$0.00/mo</p>
+              )}
+              <p className="text-[10px] text-gray-600 mt-0.5">low confidence</p>
+            </div>
+          </div>
+
+          {/* Severity + total row */}
+          <div className="flex items-center gap-4 mb-6 text-sm">
+            <span className="text-gray-500">Severity:</span>
+            {highCount > 0 && (
+              <span className="px-2 py-0.5 rounded text-xs bg-red-900 text-red-200">
+                {highCount} High
+              </span>
+            )}
+            {medCount > 0 && (
+              <span className="px-2 py-0.5 rounded text-xs bg-amber-900 text-amber-200">
+                {medCount} Med
+              </span>
+            )}
+            {lowCount > 0 && (
+              <span className="px-2 py-0.5 rounded text-xs bg-emerald-900 text-emerald-200">
+                {lowCount} Low
+              </span>
+            )}
+            <span className="ml-auto text-gray-500">
+              Total:{" "}
+              <span className="text-green-400 font-semibold">{result.estimated_total_savings}</span>
+            </span>
+          </div>
+
+          {/* Cost Explorer info banner */}
+          {result.cost_summary && !result.cost_summary.available && (
+            <div className="bg-blue-900/20 border border-blue-800/50 text-blue-300 text-xs rounded px-4 py-2 mb-4">
+              Cost Explorer data was not available for this analysis.
+              {result.cost_summary.error && (
+                <span className="text-blue-400"> ({result.cost_summary.error})</span>
+              )}
+            </div>
+          )}
+
+          {/* Cost by Service breakdown */}
+          {result.cost_summary?.available && result.cost_summary.service_breakdown && (
+            <ServiceBreakdown breakdown={result.cost_summary.service_breakdown} />
+          )}
+
+          {/* Summary text */}
+          <div className="bg-gray-900 border border-gray-800 rounded-lg p-4 mb-6">
+            <h2 className="text-sm font-medium text-gray-400 mb-2">Summary</h2>
+            <p className="text-sm text-gray-300">{result.summary}</p>
+          </div>
+
+          {/* Issues list */}
+          <h2 className="text-lg font-semibold mb-4">Issues ({result.issues.length})</h2>
+          {result.issues.length === 0 ? (
+            <p className="text-gray-500 text-sm">No cost issues found in this region.</p>
+          ) : (
+            <div className="space-y-4">
+              {result.issues.map((issue, i) => (
+                <IssueCard key={i} issue={issue} />
+              ))}
+            </div>
+          )}
+        </>
       )}
     </div>
   );
