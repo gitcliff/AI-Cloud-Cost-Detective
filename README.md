@@ -1,4 +1,4 @@
-# AI Cloud Cost Detective for AWS
+# AI Cloud Cost & Governance Detective on AWS
 
 An intelligent AWS cloud management tool that combines **deterministic pricing calculations**, **LLM-powered analysis**, and a **built-in governance engine** to find wasteful cloud spending, detect security misconfigurations, and enforce policy compliance — all from a single scan.
 
