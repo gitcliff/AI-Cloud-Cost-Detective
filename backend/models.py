@@ -24,6 +24,7 @@ class RegionInfo(BaseModel):
 class AnalyzeRequest(BaseModel):
     region: str
     include_cost_data: bool = True
+    include_governance: bool = False  # opt-in until the governance UI ships (Phase 5)
 
 
 class AnalyzeResponse(BaseModel):

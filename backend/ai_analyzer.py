@@ -479,7 +479,43 @@ async def analyze_aws_resources(
         logger.error("Failed to parse %s response: %s\nRaw: %s", provider, e, raw_text[:500])
         raise RuntimeError(f"{provider} returned an invalid response. Try running the analysis again.") from e
 
-    # Attach cost summary from Cost Explorer data.
+    _attach_cost_summary(result, cost_data)
+    result["ai_status"] = "completed"
+    return result
+
+
+def build_deterministic_result(
+    region: str,
+    resources: dict[str, list[dict]],
+    cost_data: dict | None,
+    precalculated_issues: list[dict] | None,
+    ai_error: str,
+) -> dict:
+    """Result built from the pricing engine alone, used when the LLM is unavailable.
+
+    Savings, confidence and formulas are unchanged; explanations fall back to the
+    same default text `_merge_issues` uses for issues the LLM did not cover.
+    """
+    issues = _merge_issues(precalculated_issues or [], [])
+    result = {
+        "region": region,
+        "resources_scanned": sum(len(v) for v in resources.values()),
+        "issues_found": len(issues),
+        "estimated_total_savings": _compute_total_savings(issues),
+        "summary": (
+            f"{len(issues)} issue(s) found by deterministic analysis. "
+            "AI explanations are unavailable for this run; savings figures are unaffected."
+        ),
+        "issues": issues,
+        "ai_status": "unavailable",
+        "ai_error": ai_error,
+    }
+    _attach_cost_summary(result, cost_data)
+    return result
+
+
+def _attach_cost_summary(result: dict, cost_data: dict | None) -> None:
+    """Attach cost summary from Cost Explorer data."""
     if cost_data and cost_data.get("available"):
         totals = cost_data.get("total_monthly_cost", [])
         current = totals[-1]["amount"] if totals else 0
@@ -497,5 +533,3 @@ async def analyze_aws_resources(
             "error": cost_data.get("error", "Cost Explorer not available") if cost_data else None,
         }
         result["actual_total_monthly_cost"] = None
-
-    return result
