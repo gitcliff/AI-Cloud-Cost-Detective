@@ -16,6 +16,7 @@ import boto3
 
 from governance import store
 from governance.engine import run_governance
+from governance.explain import explain_evaluations
 
 logger = logging.getLogger(__name__)
 
@@ -64,8 +65,10 @@ async def execute_scan(
     include_iam: bool,
     analysis_id: int | None = None,
     runner=run_governance,
+    explainer=None,
 ) -> dict:
-    """Run the engine and persist results. Never raises."""
+    """Run the engine, persist results, then add optional AI explanations. Never raises."""
+    explainer = explainer or explain_evaluations
     loop = asyncio.get_running_loop()
     try:
         report = await asyncio.wait_for(
@@ -98,7 +101,22 @@ async def execute_scan(
             await store.set_analysis_governance(pool, analysis_id, status)
         except Exception:
             logger.exception("Could not update governance status for analysis %s", analysis_id)
+
+    if status != "failed":
+        summary["ai_status"] = await explain_scan(pool, scan_id, explainer)
     return summary
+
+
+async def explain_scan(pool, scan_id: int, explainer=explain_evaluations) -> str:
+    """Add optional LLM explanations to a persisted scan. Never raises; never changes findings."""
+    try:
+        failing = await store.get_failing_evaluations(pool, scan_id)
+        result = await explainer(failing)
+        await store.save_explanations(pool, scan_id, result.explanations, result.status, result.error)
+        return result.status
+    except Exception:
+        logger.exception("Could not add explanations to governance scan %s", scan_id)
+        return "failed"
 
 
 async def run_governance_stage(

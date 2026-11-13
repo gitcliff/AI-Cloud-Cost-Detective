@@ -105,7 +105,7 @@ async def test_migrations_upgrade_legacy_database_preserving_rows():
             json.dumps({"summary": "legacy", "issues": []}),
         )
         applied = await run_migrations(conn)
-        assert applied == ["0001_baseline", "0002_governance"]
+        assert applied == ["0001_baseline", "0002_governance", "0003_governance_ai"]
         row = await conn.fetchrow("SELECT * FROM analyses")
         assert row["issues_found"] == 3 and json.loads(row["analysis_result"])["summary"] == "legacy"
         assert row["governance_status"] is None and row["aws_account_id"] is None
@@ -195,6 +195,34 @@ async def test_duplicate_evaluation_rejected_by_db(pool):
     assert (await store.get_scan(pool, uid, scan_id))["status"] == "running"  # transaction rolled back
 
 
+async def test_explanations_only_touch_explanation_column_within_scan(pool):
+    uid = await _user(pool, "a@x.io")
+    acct = await store.ensure_ambient_account(pool, uid, "111122223333")
+    s1 = await store.create_scan(pool, acct, "us-east-1", True)
+    s2 = await store.create_scan(pool, acct, "us-east-1", True)
+    await store.complete_scan(pool, s1, _report([_eval(rid="a"), _eval(rid="b", status=Status.PASS)]))
+    await store.complete_scan(pool, s2, _report([_eval(rid="c")]))
+
+    failing = await store.get_failing_evaluations(pool, s1)
+    assert [f["resource_id"] for f in failing] == ["a"]
+    (other,) = await store.get_failing_evaluations(pool, s2)
+
+    # An id from another scan must be ignored even if the LLM layer passed it through.
+    await store.save_explanations(
+        pool, s1, {failing[0]["id"]: "Why it matters.", other["id"]: "hijack"}, "completed", None
+    )
+    items, _ = await store.list_evaluations(pool, uid, s1, status="fail")
+    assert items[0]["explanation"] == "Why it matters."
+    assert items[0]["severity"] == "medium" and items[0]["status"] == "fail"  # untouched
+    (s2_item,), _ = await store.list_evaluations(pool, uid, s2)
+    assert s2_item["explanation"] is None
+
+    scan = await store.get_scan(pool, uid, s1)
+    assert (scan["ai_status"], scan["ai_error"]) == ("completed", None)
+    await store.save_explanations(pool, s2, {}, "unavailable", "LLM provider or API key not configured")
+    assert (await store.get_scan(pool, uid, s2))["ai_status"] == "unavailable"
+
+
 async def test_analysis_link(pool):
     import db
 
@@ -264,6 +292,14 @@ async def test_tenant_isolation_http(pool):
         assert len((await client.get("/api/governance/scans", headers=hdr(alice))).json()) == 1
         assert (await client.get("/api/governance/scans", headers=hdr(bob))).json() == []
         assert (await client.get("/api/governance/accounts", headers=hdr(bob))).json() == []
+
+        r = await client.get(f"/api/governance/scans/{scan_id}/evaluations", headers=hdr(alice))
+        (item,) = r.json()["items"]
+        assert item["remediation"]["id"] == "ebs-encrypt-via-snapshot-migration"
+        assert item["remediation"]["executed_by_application"] is False
+        assert item["explanation_source"] is None
+        assert (await client.get("/api/governance/remediations", headers=hdr(bob))).status_code == 200
+        assert (await client.get("/api/governance/remediations/nope", headers=hdr(bob))).status_code == 404
 
         r = await client.get(f"/api/governance/scans/{scan_id}/evaluations?status=bogus", headers=hdr(alice))
         assert r.status_code == 422

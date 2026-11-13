@@ -189,6 +189,46 @@ async def fail_interrupted_scans(pool: asyncpg.Pool) -> int:
     return int(result.split()[-1])
 
 
+async def get_failing_evaluations(pool: asyncpg.Pool, scan_id: int) -> list[dict]:
+    """Internal (no user scoping): the fields the explanation layer needs, for one scan's FAILs."""
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT id, rule_id, rule_name, category, severity, kind, resource_type, resource_id,
+                   message, remediation_ref, status
+              FROM governance_evaluations
+             WHERE scan_id = $1 AND status = 'fail'
+            """,
+            scan_id,
+        )
+    return [dict(r) for r in rows]
+
+
+async def save_explanations(
+    pool: asyncpg.Pool, scan_id: int, explanations: dict[int, str], ai_status: str, ai_error: str | None
+) -> None:
+    """Store LLM explanations. Only touches the `explanation` column, only within this scan."""
+    async with pool.acquire() as conn, conn.transaction():
+        if explanations:
+            await conn.execute(
+                """
+                UPDATE governance_evaluations e
+                   SET explanation = x.text
+                  FROM unnest($2::bigint[], $3::text[]) AS x(id, text)
+                 WHERE e.scan_id = $1 AND e.id = x.id
+                """,
+                scan_id,
+                list(explanations.keys()),
+                list(explanations.values()),
+            )
+        await conn.execute(
+            "UPDATE governance_scans SET ai_status = $2, ai_error = $3 WHERE id = $1",
+            scan_id,
+            ai_status,
+            (ai_error or None) and ai_error[:ERROR_MAX_CHARS],
+        )
+
+
 async def set_analysis_governance(
     pool: asyncpg.Pool, analysis_id: int, status: str, account_pk: int | None = None
 ) -> None:
@@ -207,7 +247,7 @@ async def set_analysis_governance(
 _SCAN_COLUMNS = """
     s.id, s.analysis_id, s.region, s.include_iam, s.status, s.error, s.started_at, s.finished_at,
     s.posture_score, s.coverage, s.overall_status, s.posture, s.collector_summary, s.rule_versions,
-    a.id AS account_pk, a.aws_account_id
+    s.ai_status, s.ai_error, a.id AS account_pk, a.aws_account_id
 """
 
 
@@ -229,6 +269,8 @@ def _scan(row) -> dict:
         "posture": _json(row["posture"]),
         "collectors": _json(row["collector_summary"]),
         "rule_versions": _json(row["rule_versions"]),
+        "ai_status": row["ai_status"],
+        "ai_error": row["ai_error"],
     }
 
 

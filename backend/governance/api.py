@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict
 
 from auth import get_current_user
 from aws_scanner import get_regions
-from governance import service, store
+from governance import remediation, service, store
 from governance.rules import RULES
 
 logger = logging.getLogger(__name__)
@@ -120,7 +120,27 @@ async def list_evaluations(
     if result is None:
         raise HTTPException(status_code=404, detail="Scan not found")
     items, next_cursor = result
+    scan = await store.get_scan(_pool(request), user_id, scan_id)
+    for item in items:
+        # Remediation comes from the reviewed registry, rendered by code; never from the LLM.
+        item["remediation"] = remediation.render(
+            item.get("remediation_ref"), {**item, "account_id": scan["aws_account_id"] if scan else None}
+        )
+        item["explanation_source"] = "ai_generated_non_authoritative" if item.get("explanation") else None
     return {"items": items, "next_cursor": next_cursor}
+
+
+@router.get("/remediations")
+async def list_remediations(user_id: int = Depends(get_current_user)):
+    return [t.to_dict() for t in remediation.REGISTRY.values()]
+
+
+@router.get("/remediations/{remediation_id}")
+async def get_remediation(remediation_id: str, user_id: int = Depends(get_current_user)):
+    template = remediation.REGISTRY.get(remediation_id)
+    if template is None:
+        raise HTTPException(status_code=404, detail="Remediation not found")
+    return template.to_dict()
 
 
 @router.get("/analyses/{analysis_id}/scan")
