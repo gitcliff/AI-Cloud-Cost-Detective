@@ -8,15 +8,21 @@ import { SEVERITY_ORDER, categoryLabel } from "./labels";
 
 export const POLL_INTERVAL_MS = 4000;
 
-type ViewKey = "confirmed" | "potential" | "unknown" | "pass" | "not_applicable";
+type ViewKey = "confirmed" | "potential" | "excepted" | "unknown" | "pass" | "not_applicable";
 
+// Violations exclude accepted exceptions so counts match the posture summary.
 const VIEWS: { key: ViewKey; label: string; filters: EvaluationFilters }[] = [
   {
     key: "confirmed",
     label: "Confirmed violations",
-    filters: { status: "fail", kind: "confirmed" },
+    filters: { status: "fail", kind: "confirmed", excepted: false },
   },
-  { key: "potential", label: "Potential risks", filters: { status: "fail", kind: "potential" } },
+  {
+    key: "potential",
+    label: "Potential risks",
+    filters: { status: "fail", kind: "potential", excepted: false },
+  },
+  { key: "excepted", label: "Accepted exceptions", filters: { status: "fail", excepted: true } },
   { key: "unknown", label: "Unknown", filters: { status: "unknown" } },
   { key: "pass", label: "Passed", filters: { status: "pass" } },
   { key: "not_applicable", label: "Not applicable", filters: { status: "not_applicable" } },
@@ -211,7 +217,7 @@ export default function GovernancePanel({ analysisId }: { analysisId: string }) 
       ) : (
         <div className="space-y-3">
           {items.map((e) => (
-            <EvaluationCard key={e.id} evaluation={e} />
+            <EvaluationCard key={e.id} evaluation={e} accountId={scan.account_id} />
           ))}
         </div>
       )}

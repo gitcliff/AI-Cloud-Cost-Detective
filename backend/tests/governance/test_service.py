@@ -52,7 +52,13 @@ def fake_store(monkeypatch):
     async def account(region):
         return "111122223333"
 
+    async def inputs(pool, scan_id):
+        from governance.policy import GovernancePolicy
+
+        return GovernancePolicy(require_s3_versioning=True), {("SEC-EBS-001", "vol-1"): 42}
+
     monkeypatch.setattr(service, "resolve_account_id", account)
+    monkeypatch.setattr(service.store, "load_scan_inputs", inputs)
     return log
 
 
@@ -173,3 +179,29 @@ async def test_store_failure_while_recording_failure_is_swallowed(fake_store, mo
     monkeypatch.setattr(service.store, "fail_scan", db_down)
     summary = await service.run_governance_stage(None, 5, "us-east-1", runner=lambda *a, **k: _report())
     assert summary["status"] == "failed"
+
+
+async def test_account_policy_and_exceptions_reach_the_engine(fake_store):
+    seen = {}
+
+    def runner(region, **kwargs):
+        seen.update(kwargs)
+        return _report()
+
+    await service.execute_scan(None, 11, "us-east-1", "111122223333", True, runner=runner, explainer=_explainer)
+    assert seen["policy"].require_s3_versioning is True
+    assert seen["exceptions"] == {("SEC-EBS-001", "vol-1"): 42}
+    assert seen["account_id"] == "111122223333" and seen["include_iam"] is True
+
+
+async def test_unloadable_policy_fails_the_scan_instead_of_using_defaults(fake_store, monkeypatch):
+    async def broken(pool, scan_id):
+        raise ValueError("stored policy no longer validates")
+
+    monkeypatch.setattr(service.store, "load_scan_inputs", broken)
+    ran = []
+    summary = await service.execute_scan(
+        None, 11, "us-east-1", "111122223333", True, runner=lambda *a, **k: ran.append(1) or _report()
+    )
+    assert summary["status"] == "failed" and ran == []
+    assert ("fail_scan", (11, "Governance scan failed: stored policy no longer validates")) in fake_store

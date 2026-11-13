@@ -122,6 +122,24 @@ def evaluate(
     return results
 
 
+def apply_exceptions(evaluations: list[GovernanceEvaluation], exceptions: dict[tuple[str, str], int]) -> int:
+    """Link FAIL evaluations to active accepted-risk exceptions, matched on (rule_id, resource_id).
+
+    Only failures are excepted: a PASS/UNKNOWN/NOT_APPLICABLE result is never altered,
+    and status/severity stay as evaluated (scoring counts excepted failures separately).
+    Returns how many evaluations were linked.
+    """
+    linked = 0
+    for ev in evaluations:
+        if ev.status != Status.FAIL:
+            continue
+        exception_id = exceptions.get((ev.rule_id, ev.resource_id))
+        if exception_id is not None:
+            ev.exception_id = exception_id
+            linked += 1
+    return linked
+
+
 @dataclass
 class GovernanceReport:
     account_id: str
@@ -156,6 +174,7 @@ def run_governance(
     deadline_seconds: float = 120.0,
     include_regional: bool = True,
     include_iam: bool = True,
+    exceptions: dict[tuple[str, str], int] | None = None,
 ) -> GovernanceReport:
     """Collect from AWS (read-only), evaluate rules, and score. Synchronous;
     call from a worker thread in async code.
@@ -188,6 +207,7 @@ def run_governance(
         runtime_policy=runtime_policy or load_runtime_policy(),
     )
     evaluations = evaluate(snapshot, policy, ctx, rules=rules, evaluated_at=now)
+    apply_exceptions(evaluations, exceptions or {})
     posture = compute_posture(evaluations, gate_rules=policy.gate_rules)
     return GovernanceReport(
         account_id=account_id,

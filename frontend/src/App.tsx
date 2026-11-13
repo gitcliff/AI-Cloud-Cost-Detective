@@ -1,6 +1,7 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 import Navbar from "./components/Navbar";
 import Dashboard from "./pages/Dashboard";
+import Governance from "./pages/Governance";
 import History from "./pages/History";
 import Login from "./pages/Login";
 import Report from "./pages/Report";
@@ -54,6 +55,7 @@ export default function App() {
                   <Route path="/" element={<Dashboard />} />
                   <Route path="/report/:analysisId" element={<Report />} />
                   <Route path="/history" element={<History />} />
+                  <Route path="/governance" element={<Governance />} />
                 </Routes>
               </main>
             </ProtectedRoute>
