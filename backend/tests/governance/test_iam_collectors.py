@@ -48,19 +48,176 @@ def test_credential_report_polls_until_complete_and_keeps_only_needed_fields(no_
     st.assert_no_pending_responses()
 
 
-def test_credential_report_never_ready_times_out():
-    s = StubSession()
-    st = s.stub("iam")
-    for _ in range(3):
-        st.add_response("generate_credential_report", {"State": "INPROGRESS"}, {})
-    result = run_collector(
+class FakeClock:
+    """Monotonic clock that only advances when the collector sleeps."""
+
+    def __init__(self):
+        self.now = 0.0
+        self.sleeps = []
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, seconds):
+        assert seconds >= 0
+        self.sleeps.append(seconds)
+        self.now += seconds
+
+
+@pytest.fixture
+def clock(monkeypatch):
+    c = FakeClock()
+    monkeypatch.setattr(iam_collectors, "_clock", c.monotonic)
+    monkeypatch.setattr(iam_collectors, "_sleep", c.sleep)
+    return c
+
+
+def _run_report(s, budget):
+    return run_collector(
         "iam_credential_report",
-        lambda sess, r, a: iam_collectors.collect_credential_report(sess, r, a, max_attempts=3),
+        lambda sess, r, a: iam_collectors.collect_credential_report(sess, r, a, timeout_seconds=budget),
         s,
         REGION,
         ACCOUNT,
     )
+
+
+def test_report_never_ready_stops_at_deadline(clock):
+    s = StubSession()
+    st = s.stub("iam")
+    for _ in range(4):  # requests at t=0, 1, 3, 7; sleeps 1, 2, 4, then only the remaining 3
+        st.add_response("generate_credential_report", {"State": "INPROGRESS"}, {})
+    result = _run_report(s, budget=10)
+    assert (result.status, result.error_code) == (CollectorStatus.TIMEOUT, "CredentialReportNotReady")
+    assert clock.sleeps == [1.0, 2.0, 4.0, 3.0]
+    assert sum(clock.sleeps) <= 10  # total budget, including retries, is never exceeded
+    st.assert_no_pending_responses()  # and no request starts after the budget is spent
+
+
+def test_report_throttled_until_deadline_is_distinct(clock):
+    s = StubSession()
+    st = s.stub("iam")
+    for _ in range(3):
+        st.add_client_error("generate_credential_report", "Throttling", http_status_code=400)
+    result = _run_report(s, budget=5)
+    assert (result.status, result.error_code) == (CollectorStatus.TIMEOUT, "CredentialReportThrottled")
+    assert sum(clock.sleeps) == 5
+
+
+def test_report_recovers_from_throttling_and_in_progress(clock):
+    s = StubSession()
+    st = s.stub("iam")
+    st.add_client_error("generate_credential_report", "Throttling", http_status_code=400)
+    st.add_response("generate_credential_report", {"State": "COMPLETE"}, {})
+    st.add_client_error("get_credential_report", "ReportInProgress", http_status_code=404)
+    st.add_response("generate_credential_report", {"State": "COMPLETE"}, {})
+    st.add_response("get_credential_report", {"Content": CSV.encode(), "ReportFormat": "text/csv"}, {})
+    result = _run_report(s, budget=60)
+    assert result.ok and len(result.items) == 2
+    assert clock.sleeps == [1.0, 2.0]
+    st.assert_no_pending_responses()
+
+
+@pytest.mark.parametrize(
+    "code,status",
+    [("AccessDenied", CollectorStatus.ACCESS_DENIED), ("ServiceFailure", CollectorStatus.ERROR)],
+)
+def test_report_access_denied_and_errors_are_not_retried(clock, code, status):
+    s = StubSession()
+    st = s.stub("iam")
+    st.add_client_error("generate_credential_report", code, http_status_code=403)
+    result = _run_report(s, budget=60)
+    assert (result.status, result.error_code) == (status, code)
+    assert clock.sleeps == []
+
+
+def test_zero_budget_makes_no_request(clock):
+    s = StubSession()
+    s.stub("iam")  # no responses queued: any request would fail the stubber
+    result = _run_report(s, budget=0)
     assert result.status == CollectorStatus.TIMEOUT
+
+
+def test_access_keys_from_list_access_keys_and_last_used():
+    from datetime import datetime
+
+    s = StubSession()
+    st = s.stub("iam")
+    st.add_response(
+        "list_users",
+        {
+            "Users": [
+                {
+                    "UserName": "alice",
+                    "UserId": "AIDA1111111111111",
+                    "Arn": "arn:aws:iam::111122223333:user/alice",
+                    "Path": "/",
+                    "CreateDate": datetime(2024, 1, 1),
+                },
+                {
+                    "UserName": "bob",
+                    "UserId": "AIDA2222222222222",
+                    "Arn": "arn:aws:iam::111122223333:user/bob",
+                    "Path": "/",
+                    "CreateDate": datetime(2024, 1, 1),
+                },
+            ]
+        },
+        {},
+    )
+    st.add_response(
+        "list_access_keys",
+        {
+            "AccessKeyMetadata": [
+                {
+                    "UserName": "alice",
+                    "AccessKeyId": "AKIAUSED000000000001",
+                    "Status": "Active",
+                    "CreateDate": datetime(2025, 6, 1),
+                },
+                {
+                    "UserName": "alice",
+                    "AccessKeyId": "AKIANEVER00000000002",
+                    "Status": "Inactive",
+                    "CreateDate": datetime(2026, 11, 1),
+                },
+            ]
+        },
+        {"UserName": "alice"},
+    )
+    st.add_response(
+        "get_access_key_last_used",
+        {
+            "UserName": "alice",
+            "AccessKeyLastUsed": {"LastUsedDate": datetime(2026, 11, 10), "ServiceName": "s3", "Region": "us-east-1"},
+        },
+        {"AccessKeyId": "AKIAUSED000000000001"},
+    )
+    st.add_client_error(
+        "get_access_key_last_used",
+        "AccessDenied",
+        http_status_code=403,
+        expected_params={"AccessKeyId": "AKIANEVER00000000002"},
+    )
+    st.add_client_error("list_access_keys", "AccessDenied", http_status_code=403, expected_params={"UserName": "bob"})
+
+    result = run_collector("iam_access_keys", iam_collectors.collect_access_keys, s, REGION, ACCOUNT)
+    assert result.ok
+    alice, bob = result.items
+    used, inactive = alice["keys"]["value"]
+    assert used["create_date"].startswith("2025-06-01")  # CreateDate from ListAccessKeys
+    assert used["last_used"]["value"]["last_used_date"].startswith("2026-11-10")
+    assert inactive["status"] == "Inactive"
+    assert inactive["last_used"]["status"] == "access_denied"  # per-key failure stays on that key
+    assert bob["keys"]["status"] == "access_denied"  # per-user failure stays on that user
+    st.assert_no_pending_responses()
+
+
+def test_access_keys_list_users_denied_fails_collector():
+    s = StubSession()
+    s.stub("iam").add_client_error("list_users", "AccessDenied", http_status_code=403)
+    result = run_collector("iam_access_keys", iam_collectors.collect_access_keys, s, REGION, ACCOUNT)
+    assert result.status == CollectorStatus.ACCESS_DENIED
 
 
 def test_credential_report_access_denied():

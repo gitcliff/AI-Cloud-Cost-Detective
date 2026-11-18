@@ -51,7 +51,7 @@ export default function TrendChart({ points }: { points: TrendPoint[] }) {
           </g>
         ))}
         {points.map((p, i) =>
-          p.rule_set_changed ? (
+          p.rule_set_changed || p.scoring_changed ? (
             <line
               key={`rc-${p.scan_id}`}
               x1={x(i, n)}
@@ -62,7 +62,10 @@ export default function TrendChart({ points }: { points: TrendPoint[] }) {
               strokeDasharray="3 3"
               data-testid="rule-set-marker"
             >
-              <title>Rule set changed: scores before and after aren't directly comparable</title>
+              <title>
+                {p.scoring_changed ? "Scoring method changed" : "Rule set changed"}: scores before
+                and after aren&apos;t directly comparable
+              </title>
             </line>
           ) : null,
         )}
@@ -94,7 +97,7 @@ export default function TrendChart({ points }: { points: TrendPoint[] }) {
         </span>
         <span>
           <span className="inline-block w-3 border-t border-dashed border-violet-400 align-middle mr-1" />
-          Rule set changed
+          Rule set or scoring changed
         </span>
         <span className="ml-auto">
           {n} scan{n === 1 ? "" : "s"} · latest {latest.posture_score ?? "—"} on{" "}

@@ -20,6 +20,33 @@ CLIENT_CONFIG = Config(
     max_pool_connections=16,
 )
 
+# For calls inside a caller-managed polling loop: few SDK retries and short timeouts,
+# so the loop's own deadline (not hidden SDK backoff) bounds the total time.
+POLLING_CLIENT_CONFIG = Config(
+    retries={"mode": "standard", "max_attempts": 2},
+    connect_timeout=3,
+    read_timeout=10,
+)
+
+THROTTLING_CODES = frozenset(
+    {
+        "Throttling",
+        "ThrottlingException",
+        "RequestLimitExceeded",
+        "TooManyRequestsException",
+        "LimitExceeded",
+    }
+)
+
+
+class DeadlineExceeded(TimeoutError):
+    """A polling budget ran out. `code` says what was being waited on."""
+
+    def __init__(self, code: str, message: str = ""):
+        super().__init__(message or code)
+        self.code = code
+
+
 ACCESS_DENIED_CODES = frozenset(
     {
         "AccessDenied",
@@ -32,8 +59,8 @@ ACCESS_DENIED_CODES = frozenset(
 )
 
 
-def client(session, service: str, region: str | None = None):
-    kwargs = {"config": CLIENT_CONFIG}
+def client(session, service: str, region: str | None = None, config: Config = CLIENT_CONFIG):
+    kwargs = {"config": config}
     if region:
         kwargs["region_name"] = region
     return session.client(service, **kwargs)
@@ -42,6 +69,8 @@ def client(session, service: str, region: str | None = None):
 def error_code(err: Exception) -> str:
     if isinstance(err, ClientError):
         return err.response.get("Error", {}).get("Code", "Unknown")
+    if isinstance(err, DeadlineExceeded):
+        return err.code
     return type(err).__name__
 
 

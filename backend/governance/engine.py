@@ -23,6 +23,7 @@ from governance.models import (
     Outcome,
     RuleSpec,
     Scope,
+    Severity,
     Status,
     UnknownReason,
 )
@@ -32,6 +33,33 @@ from governance.runtime_policy import RuntimePolicy, load_runtime_policy
 from governance.scoring import Posture, compute_posture
 
 logger = logging.getLogger(__name__)
+
+
+# When several required collectors failed, the reported reason is the most
+# actionable one, independent of the order collectors are listed in spec.requires.
+_UNKNOWN_PRIORITY = [
+    UnknownReason.ACCESS_DENIED.value,  # fix permissions
+    UnknownReason.TIMEOUT.value,  # retry / raise budget
+    UnknownReason.API_ERROR.value,  # AWS-side or transient error
+    UnknownReason.COLLECTOR_SKIPPED.value,  # not collected in this scan
+]
+
+
+def _collector_diagnostic(result: CollectorResult | None) -> dict:
+    if result is None:
+        return {
+            "status": "not_run",
+            "error_code": None,
+            "duration_ms": None,
+            "unknown_reason": UnknownReason.COLLECTOR_SKIPPED.value,
+        }
+    reason = COLLECTOR_TO_UNKNOWN.get(result.status, UnknownReason.API_ERROR)
+    return {
+        "status": result.status.value,
+        "error_code": result.error_code,
+        "duration_ms": result.duration_ms,
+        "unknown_reason": reason.value,
+    }
 
 
 def _rule_level_outcome(spec: RuleSpec, status: Status, message: str, **kwargs) -> Outcome:
@@ -45,24 +73,20 @@ def _outcomes_for(spec: RuleSpec, snapshot: dict[str, CollectorResult], policy, 
 
     failed = [name for name in spec.requires if name not in snapshot or not snapshot[name].ok]
     if failed:
-        first = snapshot.get(failed[0])
-        reason = COLLECTOR_TO_UNKNOWN.get(first.status) if first else UnknownReason.COLLECTOR_SKIPPED
-        evidence = {
-            "collectors": {
-                n: {
-                    "status": snapshot[n].status.value if n in snapshot else "not_run",
-                    "error_code": snapshot[n].error_code if n in snapshot else None,
-                }
-                for n in failed
-            }
-        }
+        diagnostics = {name: _collector_diagnostic(snapshot.get(name)) for name in failed}
+        reasons = {d["unknown_reason"] for d in diagnostics.values()}
+        primary = min(reasons, key=_UNKNOWN_PRIORITY.index)
+        detail = ", ".join(
+            f"{n} ({d['status']}{': ' + d['error_code'] if d['error_code'] else ''})" for n, d in diagnostics.items()
+        )
         return [
             _rule_level_outcome(
                 spec,
                 Status.UNKNOWN,
-                f"Required data unavailable: {', '.join(failed)}",
-                evidence=evidence,
-                unknown_reason=reason,
+                f"Required data unavailable: {detail}",
+                evidence={"collectors": diagnostics},
+                unknown_reason=UnknownReason(primary),
+                details={"unknown_reasons": sorted(reasons, key=_UNKNOWN_PRIORITY.index)},
             )
         ]
 
@@ -149,11 +173,13 @@ class GovernanceReport:
     posture: Posture
     collectors: dict[str, dict] = field(default_factory=dict)
     rule_versions: dict[str, int] = field(default_factory=dict)
+    regions: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
             "account_id": self.account_id,
             "region": self.region,
+            "regions": self.regions or [self.region],
             "evaluated_at": self.evaluated_at.isoformat(),
             "posture": self.posture.to_dict(),
             "collectors": self.collectors,
@@ -162,8 +188,25 @@ class GovernanceReport:
         }
 
 
-def run_governance(
-    region: str,
+def rule_severities(policy: GovernancePolicy, rules: tuple[RuleSpec, ...] = RULES) -> dict[str, Severity]:
+    """Each rule's configured severity: the account override, else the rule default."""
+    return {r.rule_id: policy.severity_overrides.get(r.rule_id) or r.default_severity for r in rules}
+
+
+def _collector_summary(snapshot: dict[str, CollectorResult], prefix: str = "") -> dict[str, dict]:
+    return {
+        f"{prefix}{n}": {
+            "status": r.status.value,
+            "items": len(r.items),
+            "error_code": r.error_code,
+            "duration_ms": r.duration_ms,
+        }
+        for n, r in snapshot.items()
+    }
+
+
+def run_account_governance(
+    regions: list[str],
     *,
     session=None,
     account_id: str | None = None,
@@ -176,53 +219,77 @@ def run_governance(
     include_iam: bool = True,
     exceptions: dict[tuple[str, str], int] | None = None,
 ) -> GovernanceReport:
-    """Collect from AWS (read-only), evaluate rules, and score. Synchronous;
-    call from a worker thread in async code.
+    """Scan one AWS account across `regions` and produce a single report.
 
-    IAM is account-global: when scanning several regions, pass include_iam=True
-    for exactly one of them.
+    Regional collectors and rules run once per distinct region. IAM is
+    account-global: its collectors and rules run exactly once per call, however
+    many regions are given, so callers never need to suppress IAM per region.
+    Synchronous; call from a worker thread in async code.
     """
-    session = session or boto3.Session(region_name=region)
+    regions = list(dict.fromkeys(regions))  # de-duplicate, keep order
+    if not regions:
+        raise ValueError("at least one region is required")
+    primary = regions[0]
+    session = session or boto3.Session(region_name=primary)
     policy = policy or GovernancePolicy()
     if account_id is None:
-        account_id = client(session, "sts", region).get_caller_identity()["Account"]
-
-    rules = (REGIONAL_RULES if include_regional else ()) + (IAM_RULES if include_iam else ())
+        account_id = client(session, "sts", primary).get_caller_identity()["Account"]
     registry = collectors or {**COLLECTORS, **IAM_COLLECTORS}
-    wanted = (list(COLLECTORS) if include_regional else []) + (list(IAM_COLLECTORS) if include_iam else [])
-    # Collectors absent from the registry are simply not run; dependent rules report UNKNOWN.
-    snapshot = run_collectors(
-        session,
-        region,
-        account_id,
-        names=[n for n in wanted if n in registry],
-        collectors=registry,
-        timeout_seconds=deadline_seconds,
-    )
     now = datetime.now(UTC)
-    ctx = EvalContext(
-        account_id=account_id,
-        region=region,
-        today=today or now.date(),
-        runtime_policy=runtime_policy or load_runtime_policy(),
-    )
-    evaluations = evaluate(snapshot, policy, ctx, rules=rules, evaluated_at=now)
+    eval_day = today or now.date()
+    rp = runtime_policy or load_runtime_policy()
+    prefix_regions = len(regions) > 1
+
+    evaluations: list[GovernanceEvaluation] = []
+    collector_summary: dict[str, dict] = {}
+    rules_run: tuple[RuleSpec, ...] = ()
+
+    def ctx_for(region: str) -> EvalContext:
+        return EvalContext(account_id=account_id, region=region, today=eval_day, runtime_policy=rp)
+
+    if include_regional:
+        rules_run += REGIONAL_RULES
+        for region in regions:
+            snapshot = run_collectors(
+                session,
+                region,
+                account_id,
+                names=[n for n in COLLECTORS if n in registry],
+                collectors=registry,
+                timeout_seconds=deadline_seconds,
+            )
+            evaluations += evaluate(snapshot, policy, ctx_for(region), rules=REGIONAL_RULES, evaluated_at=now)
+            collector_summary.update(_collector_summary(snapshot, f"{region}/" if prefix_regions else ""))
+
+    if include_iam:
+        rules_run += IAM_RULES
+        iam_snapshot = run_collectors(
+            session,
+            primary,
+            account_id,
+            names=[n for n in IAM_COLLECTORS if n in registry],
+            collectors=registry,
+            timeout_seconds=deadline_seconds,
+        )
+        evaluations += evaluate(iam_snapshot, policy, ctx_for(primary), rules=IAM_RULES, evaluated_at=now)
+        collector_summary.update(_collector_summary(iam_snapshot, "global/" if prefix_regions else ""))
+
     apply_exceptions(evaluations, exceptions or {})
-    posture = compute_posture(evaluations, gate_rules=policy.gate_rules)
+    posture = compute_posture(
+        evaluations, gate_rules=policy.gate_rules, rule_severities=rule_severities(policy, rules_run)
+    )
     return GovernanceReport(
         account_id=account_id,
-        region=region,
+        region=primary,
         evaluated_at=now,
         evaluations=evaluations,
         posture=posture,
-        collectors={
-            n: {
-                "status": r.status.value,
-                "items": len(r.items),
-                "error_code": r.error_code,
-                "duration_ms": r.duration_ms,
-            }
-            for n, r in snapshot.items()
-        },
-        rule_versions={r.rule_id: r.version for r in rules},
+        collectors=collector_summary,
+        rule_versions={r.rule_id: r.version for r in rules_run},
+        regions=regions,
     )
+
+
+def run_governance(region: str, **kwargs) -> GovernanceReport:
+    """Single-region scan (plus IAM unless include_iam=False). See run_account_governance."""
+    return run_account_governance([region], **kwargs)

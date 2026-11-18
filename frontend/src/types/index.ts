@@ -85,6 +85,32 @@ export interface Posture {
   failed_by_kind: Partial<Record<FindingKind, number>>;
   scope_scores: Record<string, number | null>;
   gate_triggered_by: string[];
+  // scoring_version 2 (absent on scans scored by the earlier method)
+  scoring_version?: number;
+  score_scopes?: string[];
+  unevaluable_scopes?: string[];
+  scope_coverage?: Record<string, number | null>;
+  critical_coverage?: number | null;
+  critical_controls?: string[];
+  accepted_gate_failures?: string[];
+  rule_scores?: RuleScore[];
+  status_reasons?: string[];
+}
+
+export interface RuleScore {
+  rule_id: string;
+  scope: "account" | "resource";
+  category: string;
+  severity: GovernanceSeverity;
+  weight: number;
+  pass: number;
+  fail: number;
+  excepted: number;
+  unknown: number;
+  not_applicable: number;
+  pass_rate: number | null;
+  scored: boolean;
+  unscored_reason: "unknown" | "not_applicable" | "excepted" | "zero_weight" | null;
 }
 
 export interface CollectorSummary {
@@ -160,6 +186,8 @@ export interface GovernanceEvaluation {
   explanation: string | null;
   explanation_source: "ai_generated_non_authoritative" | null;
   remediation: Remediation | null;
+  /** Governance disposition of a failure: still a FAIL technically, even when accepted */
+  disposition?: "open" | "accepted_risk" | null;
 }
 
 export interface EvaluationPage {
@@ -256,4 +284,6 @@ export interface TrendPoint {
   failed: number | null;
   excepted: number | null;
   rule_set_changed: boolean;
+  scoring_version?: number;
+  scoring_changed?: boolean;
 }

@@ -9,10 +9,13 @@ from tests.governance.conftest import (
     ADMIN_ARN,
     ADMIN_DOC,
     READ_ONLY_ARN,
+    access_key,
     auth_details,
     cred_row,
+    fld,
     iam_role,
     iam_user,
+    key_user,
     ok,
 )
 
@@ -68,45 +71,109 @@ def test_console_mfa(policy, ctx):
     }
 
 
+def keys_snap(*users):
+    return {"iam_access_keys": ok("iam_access_keys", list(users))}
+
+
+def key_rid(key_id="AKIAEXAMPLE0001", user="alice"):
+    return f"arn:aws:iam::{ACCOUNT}:user/{user}/access-key/{key_id}"
+
+
 class TestAccessKeys:
-    def _key(self, outcomes, user="alice", n=1):
-        return by_id(outcomes)[f"arn:aws:iam::{ACCOUNT}:user/{user}/access-key-{n}"]
+    """IAM-USR-002 (unused) and IAM-USR-003 (age), from ListAccessKeys + GetAccessKeyLastUsed.
+    TODAY is 2026-11-13; default thresholds are 90 days."""
 
-    def test_recently_used_key_passes(self, policy, ctx):
-        assert self._key(iam.access_key_unused(creds(cred_row()), policy, ctx)).status == Status.PASS
+    def _one(self, func, *users, policy, ctx, rid=None):
+        return by_id(func(keys_snap(*users), policy, ctx))[rid or key_rid()]
 
-    def test_key_unused_beyond_threshold_fails(self, policy, ctx):
-        row = cred_row(access_key_1_last_used_date="2026-01-01T00:00:00+00:00")
-        out = self._key(iam.access_key_unused(creds(row), policy, ctx))
-        assert out.status == Status.FAIL and out.evidence["days_since_last_use"] > 90
+    def test_recently_created_never_used_key_passes(self, policy, ctx):
+        user = key_user(keys=[access_key(created="2026-11-01T00:00:00+00:00", last_used="never")])
+        out = self._one(iam.access_key_unused, user, policy=policy, ctx=ctx)
+        assert out.status == Status.PASS and out.evidence["days_since_creation"] == 12
 
-    def test_never_used_old_key_fails_new_key_passes(self, policy, ctx):
-        old = cred_row("old", access_key_1_last_used_date="N/A", access_key_1_last_rotated="2025-01-01T00:00:00+00:00")
-        new = cred_row("new", access_key_1_last_used_date="N/A", access_key_1_last_rotated="2026-11-01T00:00:00+00:00")
-        out = iam.access_key_unused(creds(old, new), policy, ctx)
-        assert self._key(out, "old").status == Status.FAIL
-        assert self._key(out, "new").status == Status.PASS
+    def test_old_never_used_key_fails(self, policy, ctx):
+        user = key_user(keys=[access_key(created="2025-01-01T00:00:00+00:00", last_used="never")])
+        out = self._one(iam.access_key_unused, user, policy=policy, ctx=ctx)
+        assert out.status == Status.FAIL and "never used" in out.message
 
-    def test_missing_last_used_is_unknown_not_fail(self, policy, ctx):
-        row = cred_row(access_key_1_last_used_date="no_information", access_key_1_last_rotated="garbage")
-        out = self._key(iam.access_key_unused(creds(row), policy, ctx))
-        assert (out.status, out.unknown_reason) == (Status.UNKNOWN, UnknownReason.MISSING_METADATA)
+    @pytest.mark.parametrize(
+        "last_used,expected",
+        [("2026-11-11T00:00:00+00:00", Status.PASS), ("2026-01-01T00:00:00+00:00", Status.FAIL)],
+    )
+    def test_used_key_judged_by_last_use_not_age(self, last_used, expected, policy, ctx):
+        # Old key, so only the last-use date can make it pass.
+        user = key_user(keys=[access_key(created="2020-01-01T00:00:00+00:00", last_used=last_used)])
+        assert self._one(iam.access_key_unused, user, policy=policy, ctx=ctx).status == expected
 
-    def test_both_keys_evaluated_and_no_keys_not_applicable(self, policy, ctx):
-        two = cred_row("two", access_key_2_active="true", access_key_2_last_rotated="2025-01-01T00:00:00+00:00")
-        none = cred_row("none", access_key_1_active="false")
-        out = by_id(iam.access_key_age(creds(two, none), policy, ctx))
-        assert out[f"arn:aws:iam::{ACCOUNT}:user/two/access-key-1"].status == Status.PASS
-        assert out[f"arn:aws:iam::{ACCOUNT}:user/two/access-key-2"].status == Status.FAIL
-        assert out[f"arn:aws:iam::{ACCOUNT}:user/none"].status == Status.NOT_APPLICABLE
+    @pytest.mark.parametrize(
+        "key,reason",
+        [
+            (access_key(last_used=fld(status="access_denied", code="AccessDenied")), UnknownReason.ACCESS_DENIED),
+            (access_key(last_used=fld(status="error", code="ServiceFailure")), UnknownReason.API_ERROR),
+            # no date but a real service name: contradictory evidence
+            (access_key(last_used=fld({"last_used_date": None, "service_name": "s3"})), UnknownReason.MISSING_METADATA),
+            (access_key(created=None, last_used="never"), UnknownReason.MISSING_METADATA),
+            (access_key(created="not-a-date", last_used="never"), UnknownReason.MISSING_METADATA),
+        ],
+    )
+    def test_api_failure_or_incomplete_evidence_is_unknown(self, key, reason, policy, ctx):
+        out = self._one(iam.access_key_unused, key_user(keys=[key]), policy=policy, ctx=ctx)
+        assert (out.status, out.unknown_reason) == (Status.UNKNOWN, reason)
 
-    def test_unknown_active_flag_is_unknown(self, policy, ctx):
-        out = iam.access_key_age(creds(cred_row(access_key_1_active=None)), policy, ctx)
-        assert out[0].status == Status.UNKNOWN
+    def test_age_uses_create_date_not_credential_report(self, policy, ctx):
+        """The credential report's last_rotated must not stand in for CreateDate."""
+        snap = keys_snap(key_user(keys=[access_key(created="2025-01-01T00:00:00+00:00")]))
+        # A credential report claiming a fresh key is present but must be ignored.
+        snap["iam_credential_report"] = ok(
+            "iam_credential_report", [cred_row(access_key_1_last_rotated="2026-11-12T00:00:00+00:00")]
+        )
+        out = by_id(iam.access_key_age(snap, policy, ctx))[key_rid()]
+        assert out.status == Status.FAIL and out.evidence["create_date"].startswith("2025-01-01")
+        assert out.evidence["source_api"] == "iam:ListAccessKeys"
 
-    def test_threshold_is_configurable(self, policy, ctx):
-        policy.iam_key_max_age_days = 10  # fixture key is 30 days old
-        assert self._key(iam.access_key_age(creds(cred_row()), policy, ctx)).status == Status.FAIL
+    def test_age_rule(self, policy, ctx):
+        fresh = access_key("AKIAFRESH", created="2026-10-14T00:00:00+00:00")
+        old = access_key("AKIAOLD", created="2025-01-01T00:00:00+00:00")
+        out = by_id(iam.access_key_age(keys_snap(key_user(keys=[fresh, old])), policy, ctx))
+        assert out[key_rid("AKIAFRESH")].status == Status.PASS
+        assert out[key_rid("AKIAOLD")].status == Status.FAIL
+        policy.iam_key_max_age_days = 10
+        assert (
+            by_id(iam.access_key_age(keys_snap(key_user(keys=[fresh])), policy, ctx))[key_rid("AKIAFRESH")].status
+            == Status.FAIL
+        )
+
+    @pytest.mark.parametrize("func", [iam.access_key_unused, iam.access_key_age])
+    def test_inactive_key_policy_is_not_applicable(self, func, policy, ctx):
+        old_inactive = access_key(status="Inactive", created="2019-01-01T00:00:00+00:00", last_used="never")
+        out = self._one(func, key_user(keys=[old_inactive]), policy=policy, ctx=ctx)
+        assert out.status == Status.NOT_APPLICABLE and "Inactive key" in out.message
+
+    @pytest.mark.parametrize("func", [iam.access_key_unused, iam.access_key_age])
+    def test_unknown_key_status_is_unknown(self, func, policy, ctx):
+        out = self._one(func, key_user(keys=[access_key(status=None)]), policy=policy, ctx=ctx)
+        assert out.status == Status.UNKNOWN
+
+    @pytest.mark.parametrize("func", [iam.access_key_unused, iam.access_key_age])
+    def test_user_level_outcomes(self, func, policy, ctx):
+        none = key_user("nokeys", keys=[])
+        broken = key_user("broken", keys_field=fld(status="access_denied", code="AccessDenied"))
+        out = by_id(func(keys_snap(none, broken), policy, ctx))
+        assert out[f"arn:aws:iam::{ACCOUNT}:user/nokeys"].status == Status.NOT_APPLICABLE
+        b = out[f"arn:aws:iam::{ACCOUNT}:user/broken"]
+        assert (b.status, b.unknown_reason) == (Status.UNKNOWN, UnknownReason.ACCESS_DENIED)
+
+    def test_every_active_key_is_evaluated(self, policy, ctx):
+        keys = [access_key(f"AKIA{i}", created="2026-11-01T00:00:00+00:00") for i in range(3)]
+        out = iam.access_key_age(keys_snap(key_user(keys=keys)), policy, ctx)
+        assert {o.resource_id for o in out} == {key_rid(f"AKIA{i}") for i in range(3)}
+
+    def test_rules_depend_on_access_key_collector_at_version_2(self):
+        from governance.rules import RULES_BY_ID
+
+        for rule_id in ("IAM-USR-002", "IAM-USR-003"):
+            assert RULES_BY_ID[rule_id].requires == ("iam_access_keys",)
+            assert RULES_BY_ID[rule_id].version == 2
 
 
 # ── Admin access ─────────────────────────────────────────────────────────────

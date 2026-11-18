@@ -176,6 +176,38 @@ describe("PostureSummary", () => {
     expect(container.textContent).toContain("never as");
   });
 
+  it("shows scope and critical coverage, status reasons and accepted gate failures", async () => {
+    const scan = scanFixture();
+    scan.posture = {
+      ...scan.posture!,
+      overall_status: "incomplete",
+      scoring_version: 2,
+      scope_coverage: { account: 0.5, resource: 1 },
+      unevaluable_scopes: ["account"],
+      critical_coverage: 0.75,
+      status_reasons: ["Scope(s) could not be evaluated: account"],
+      accepted_gate_failures: ["SEC-S3-003:arn:aws:s3:::exports"],
+    };
+    await render(<PostureSummary scan={scan} />);
+    const coverage = container.querySelector("[data-testid=scope-coverage]")!.textContent;
+    expect(coverage).toContain("Account controls: 50% (not evaluable)");
+    expect(coverage).toContain("Resource controls: 100%");
+    expect(coverage).toContain("Critical controls: 75%");
+    expect(container.querySelector("[data-testid=status-reasons]")?.textContent).toContain(
+      "Scope(s) could not be evaluated: account",
+    );
+    expect(container.textContent).toContain(
+      "Accepted as risk (still failing): SEC-S3-003:arn:aws:s3:::exports",
+    );
+    expect(container.textContent).toContain("Failures by category:");
+  });
+
+  it("renders older (scoring v1) postures without the new fields", async () => {
+    await render(<PostureSummary scan={scanFixture()} />);
+    expect(container.querySelector("[data-testid=status-reasons]")).toBeNull();
+    expect(container.textContent).not.toContain("Accepted as risk");
+  });
+
   it("explains a gate-triggered failure", async () => {
     const scan = scanFixture();
     scan.posture = {
