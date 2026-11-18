@@ -12,6 +12,7 @@ from governance.policy_analysis import (
     document_admin_level,
     trust_principals,
 )
+from governance.rules.common import field_evidence, field_ok, field_reason
 
 ROOT_USER = "<root_account>"
 SERVICE_LINKED_PATH = "/aws-service-role/"
@@ -114,105 +115,136 @@ def console_user_without_mfa(snapshot, policy, ctx) -> list[Outcome]:
     return outcomes
 
 
-def _active_keys(row: dict) -> tuple[list[int], bool]:
-    """Return (active slots, all_flags_known)."""
-    slots, known = [], True
-    for n in (1, 2):
-        flag = row.get(f"access_key_{n}_active")
-        if flag == "true":
-            slots.append(n)
-        elif flag != "false":
-            known = False
-    return slots, known
+def _parse_date(value) -> date | None:
+    if not value or not isinstance(value, str):
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).date()
+    except ValueError:
+        return None
 
 
-def _per_key(snapshot, ctx, evaluate_key) -> list[Outcome]:
+INACTIVE_KEY_MESSAGE = (
+    "Inactive key: it cannot sign requests, so it is not evaluated. Delete keys that are no longer needed."
+)
+
+
+def _per_access_key(snapshot, evaluate_key) -> list[Outcome]:
+    """Shared iteration over iam_access_keys (ListAccessKeys data).
+
+    Policy for key states, applied by both key rules:
+      * Active key                        -> evaluated by the rule
+      * Inactive key                      -> NOT_APPLICABLE (cannot authenticate)
+      * user has no keys                  -> NOT_APPLICABLE for that user
+      * keys for a user couldn't be read  -> UNKNOWN for that user
+    """
     outcomes = []
-    for row in _users(snapshot):
-        arn, name = row.get("arn") or row.get("user"), row.get("user")
-        slots, known = _active_keys(row)
-        if not known:
+    for user in snapshot["iam_access_keys"].items:
+        arn, name = user.get("arn") or user.get("user_name"), user.get("user_name")
+        keys_field = user.get("keys")
+        if not field_ok(keys_field):
             outcomes.append(
                 Outcome(
                     arn,
                     Status.UNKNOWN,
-                    "Access key status not reported",
-                    {},
+                    "Access keys for this user could not be listed",
+                    field_evidence(keys_field),
                     name,
                     resource_type="iam_user",
-                    unknown_reason=UnknownReason.MISSING_METADATA,
+                    unknown_reason=field_reason(keys_field),
                 )
             )
             continue
-        if not slots:
+        keys = keys_field.get("value") or []
+        if not keys:
             outcomes.append(
-                Outcome(
-                    arn, Status.NOT_APPLICABLE, "User has no active access keys", {}, name, resource_type="iam_user"
-                )
+                Outcome(arn, Status.NOT_APPLICABLE, "User has no access keys", {}, name, resource_type="iam_user")
             )
             continue
-        for n in slots:
-            outcomes.append(evaluate_key(row, n, f"{arn}/access-key-{n}", name))
+        for key in keys:
+            rid = f"{arn}/access-key/{key.get('access_key_id')}"
+            evidence = {
+                "access_key_id": key.get("access_key_id"),
+                "status": key.get("status"),
+                "create_date": key.get("create_date"),
+                "source_api": "iam:ListAccessKeys",
+            }
+            if key.get("status") != "Active":
+                status = Status.NOT_APPLICABLE if key.get("status") == "Inactive" else Status.UNKNOWN
+                message = INACTIVE_KEY_MESSAGE if status == Status.NOT_APPLICABLE else "Key status not reported"
+                outcomes.append(
+                    Outcome(
+                        rid,
+                        status,
+                        message,
+                        evidence,
+                        name,
+                        unknown_reason=None if status == Status.NOT_APPLICABLE else UnknownReason.MISSING_METADATA,
+                    )
+                )
+                continue
+            outcomes.append(evaluate_key(key, rid, name, evidence))
     return outcomes
 
 
+def _unknown(rid, name, evidence, message, reason=UnknownReason.MISSING_METADATA) -> Outcome:
+    return Outcome(rid, Status.UNKNOWN, message, evidence, name, unknown_reason=reason)
+
+
 def access_key_unused(snapshot, policy, ctx) -> list[Outcome]:
+    """IAM-USR-002: an active key not used within the threshold.
+
+    Used key: days since LastUsedDate. Never-used key (no LastUsedDate and
+    ServiceName 'N/A'): days since CreateDate, so a new unused key passes and an
+    old unused key fails. Missing or contradictory evidence: UNKNOWN."""
     limit = policy.iam_key_unused_days
 
-    def check(row, n, rid, name):
-        used_state, used = _report_date(row.get(f"access_key_{n}_last_used_date"))
-        created_state, created = _report_date(row.get(f"access_key_{n}_last_rotated"))
-        evidence = {
-            "last_used_date": row.get(f"access_key_{n}_last_used_date"),
-            "last_rotated": row.get(f"access_key_{n}_last_rotated"),
-            "threshold_days": limit,
-        }
-        if used_state == "date":
+    def check(key, rid, name, evidence):
+        evidence = {**evidence, "threshold_days": limit}
+        created = _parse_date(key.get("create_date"))
+        last_used_field = key.get("last_used")
+        if not field_ok(last_used_field):
+            evidence["last_used_lookup"] = field_evidence(last_used_field)
+            return _unknown(rid, name, evidence, "Key last-used information unavailable", field_reason(last_used_field))
+        info = last_used_field.get("value") or {}
+        evidence.update({"last_used_date": info.get("last_used_date"), "last_used_service": info.get("service_name")})
+        used = _parse_date(info.get("last_used_date"))
+        if used is not None:
             idle = (ctx.today - used).days
             evidence["days_since_last_use"] = idle
             if idle > limit:
                 return Outcome(rid, Status.FAIL, f"Active key unused for {idle} days", evidence, name)
             return Outcome(rid, Status.PASS, f"Key used {idle} days ago", evidence, name)
-        if used_state == "never" and created_state == "date":
-            age = (ctx.today - created).days
-            evidence["days_since_creation"] = age
-            if age > limit:
-                return Outcome(rid, Status.FAIL, f"Active key never used, created {age} days ago", evidence, name)
-            return Outcome(rid, Status.PASS, f"Key never used but only {age} days old", evidence, name)
-        return Outcome(
-            rid,
-            Status.UNKNOWN,
-            "Key last-used information unavailable",
-            evidence,
-            name,
-            unknown_reason=UnknownReason.MISSING_METADATA,
-        )
+        never_used = info.get("last_used_date") is None and info.get("service_name") == "N/A"
+        if not never_used:
+            return _unknown(rid, name, evidence, "Key last-used evidence is incomplete")
+        if created is None:
+            return _unknown(rid, name, evidence, "Key creation date unavailable")
+        age = (ctx.today - created).days
+        evidence["days_since_creation"] = age
+        if age > limit:
+            return Outcome(rid, Status.FAIL, f"Active key never used, created {age} days ago", evidence, name)
+        return Outcome(rid, Status.PASS, f"Key never used, created {age} days ago", evidence, name)
 
-    return _per_key(snapshot, ctx, check)
+    return _per_access_key(snapshot, check)
 
 
 def access_key_age(snapshot, policy, ctx) -> list[Outcome]:
+    """IAM-USR-003: an active key older than the rotation threshold, from CreateDate."""
     limit = policy.iam_key_max_age_days
 
-    def check(row, n, rid, name):
-        state, created = _report_date(row.get(f"access_key_{n}_last_rotated"))
-        evidence = {"last_rotated": row.get(f"access_key_{n}_last_rotated"), "threshold_days": limit}
-        if state != "date":
-            return Outcome(
-                rid,
-                Status.UNKNOWN,
-                "Key creation date unavailable",
-                evidence,
-                name,
-                unknown_reason=UnknownReason.MISSING_METADATA,
-            )
+    def check(key, rid, name, evidence):
+        evidence = {**evidence, "threshold_days": limit}
+        created = _parse_date(key.get("create_date"))
+        if created is None:
+            return _unknown(rid, name, evidence, "Key creation date unavailable")
         age = (ctx.today - created).days
         evidence["age_days"] = age
         if age > limit:
             return Outcome(rid, Status.FAIL, f"Key is {age} days old", evidence, name)
         return Outcome(rid, Status.PASS, f"Key is {age} days old", evidence, name)
 
-    return _per_key(snapshot, ctx, check)
+    return _per_access_key(snapshot, check)
 
 
 # ── Admin access ─────────────────────────────────────────────────────────────

@@ -156,10 +156,10 @@ REGIONAL_RULES: tuple[RuleSpec, ...] = (
 )
 
 
-def _iam(rule_id, name, severity, scope, resource_type, requires, func, remediation_ref, description=""):
+def _iam(rule_id, name, severity, scope, resource_type, requires, func, remediation_ref, description="", version=1):
     return RuleSpec(
         rule_id=rule_id,
-        version=1,
+        version=version,
         name=name,
         category=Category.IAM,
         default_severity=severity,
@@ -174,6 +174,7 @@ def _iam(rule_id, name, severity, scope, resource_type, requires, func, remediat
 
 
 _CRED = ("iam_credential_report",)
+_KEYS = ("iam_access_keys",)
 _AUTH = ("iam_authorization_details",)
 _SUMMARY = ("iam_account_summary",)
 _PWD = ("iam_password_policy",)
@@ -215,9 +216,11 @@ IAM_RULES: tuple[RuleSpec, ...] = (
         Severity.MEDIUM,
         Scope.RESOURCE,
         "iam_access_key",
-        _CRED,
+        _KEYS,
         iam.access_key_unused,
         "iam-deactivate-unused-key",
+        "Evaluated from ListAccessKeys CreateDate and GetAccessKeyLastUsed; inactive keys are not applicable.",
+        2,  # v2: CreateDate from ListAccessKeys instead of the credential report
     ),
     _iam(
         "IAM-USR-003",
@@ -225,9 +228,11 @@ IAM_RULES: tuple[RuleSpec, ...] = (
         Severity.LOW,
         Scope.RESOURCE,
         "iam_access_key",
-        _CRED,
+        _KEYS,
         iam.access_key_age,
         "iam-rotate-access-key",
+        "Evaluated from ListAccessKeys CreateDate and GetAccessKeyLastUsed; inactive keys are not applicable.",
+        2,  # v2: CreateDate from ListAccessKeys instead of the credential report
     ),
     _iam(
         "IAM-USR-004",

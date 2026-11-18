@@ -185,8 +185,30 @@ def auth_details(users=None, groups=None, roles=None, policies=None):
     }
 
 
+def access_key(key_id="AKIAEXAMPLE0001", status="Active", created="2026-10-14T00:00:00+00:00", last_used=None):
+    """One ListAccessKeys entry. `last_used`: a date string, "never", a field dict, or None (= used 2 days ago)."""
+    if isinstance(last_used, dict):
+        lu = last_used
+    elif last_used == "never":
+        lu = fld({"last_used_date": None, "service_name": "N/A", "region": "N/A"})
+    else:
+        lu = fld(
+            {"last_used_date": last_used or "2026-11-11T00:00:00+00:00", "service_name": "s3", "region": "us-east-1"}
+        )
+    return {"access_key_id": key_id, "status": status, "create_date": created, "last_used": lu}
+
+
+def key_user(name="alice", keys=None, keys_field=None):
+    return {
+        "user_name": name,
+        "arn": f"arn:aws:iam::{ACCOUNT}:user/{name}",
+        "keys": keys_field if keys_field is not None else fld([access_key()] if keys is None else keys),
+    }
+
+
 def healthy_iam_snapshot():
     return {
+        "iam_access_keys": ok("iam_access_keys", [key_user()]),
         "iam_credential_report": ok(
             "iam_credential_report", [cred_row("<root_account>", arn=f"arn:aws:iam::{ACCOUNT}:root"), cred_row()]
         ),

@@ -58,6 +58,35 @@ export default function PostureSummary({ scan }: { scan: GovernanceScan }) {
                 />
               </div>
             </div>
+            <div
+              className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-gray-500"
+              data-testid="scope-coverage"
+            >
+              {Object.entries(posture.scope_coverage ?? {}).map(([scope, value]) => (
+                <span key={scope}>
+                  {scope === "account" ? "Account" : "Resource"} controls: {percent(value)}
+                  {posture.unevaluable_scopes?.includes(scope) ? " (not evaluable)" : ""}
+                </span>
+              ))}
+              {posture.critical_coverage !== undefined && posture.critical_coverage !== null && (
+                <span>Critical controls: {percent(posture.critical_coverage)}</span>
+              )}
+            </div>
+            {posture.status_reasons && posture.status_reasons.length > 0 && (
+              <ul
+                className="text-xs text-gray-400 list-disc list-inside"
+                data-testid="status-reasons"
+              >
+                {posture.status_reasons.map((r) => (
+                  <li key={r}>{r}</li>
+                ))}
+              </ul>
+            )}
+            {posture.accepted_gate_failures && posture.accepted_gate_failures.length > 0 && (
+              <p className="text-xs text-indigo-300">
+                Accepted as risk (still failing): {posture.accepted_gate_failures.join(", ")}
+              </p>
+            )}
             {posture.gate_triggered_by.length > 0 && (
               <p className="text-xs text-red-300">
                 Overall status forced to Fail by: {posture.gate_triggered_by.join(", ")}
@@ -91,7 +120,7 @@ export default function PostureSummary({ scan }: { scan: GovernanceScan }) {
             ))}
           </div>
           <div className="flex items-center gap-2">
-            <span className="text-gray-500">By category:</span>
+            <span className="text-gray-500">Failures by category:</span>
             {Object.entries(posture.failed_by_category).map(([cat, n]) => (
               <span key={cat} className="px-2 py-0.5 rounded bg-gray-800 text-gray-300">
                 {n} {categoryLabel(cat)}

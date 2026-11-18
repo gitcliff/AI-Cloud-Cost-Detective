@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from auth import get_current_user
 from aws_scanner import get_regions
 from governance import remediation, service, store
+from governance.models import disposition_of
 from governance.policy_config import AccountPolicy
 from governance.rules import RULES, RULES_BY_ID
 
@@ -135,6 +136,7 @@ async def list_evaluations(
             item.get("remediation_ref"), {**item, "account_id": scan["aws_account_id"] if scan else None}
         )
         item["explanation_source"] = "ai_generated_non_authoritative" if item.get("explanation") else None
+        item["disposition"] = disposition_of(item["status"], item.get("exception_id"))
     return {"items": items, "next_cursor": next_cursor}
 
 

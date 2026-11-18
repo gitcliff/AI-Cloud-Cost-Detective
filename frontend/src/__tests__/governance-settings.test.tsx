@@ -374,6 +374,14 @@ describe("TrendChart", () => {
     expect(container.querySelectorAll("[data-testid=rule-set-marker]")).toHaveLength(1);
     expect(container.textContent).toContain("3 scans · latest 82");
 
+    await render(
+      <TrendChart
+        points={[trend(), trend({ scan_id: 2, scoring_version: 2, scoring_changed: true })]}
+      />,
+    );
+    const marker = container.querySelector("[data-testid=rule-set-marker] title");
+    expect(marker?.textContent).toContain("Scoring method changed");
+
     await render(<TrendChart points={[]} />);
     expect(container.textContent).toContain("No completed scans yet");
   });

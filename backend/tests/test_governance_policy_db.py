@@ -206,3 +206,66 @@ async def test_http_policy_exceptions_trends_and_isolation(pool):
         stored = json.loads(await conn.fetchval("SELECT settings FROM account_policies WHERE account_id = $1", acct))
     assert AccountPolicy.model_validate(stored).mandatory_tags == ["Owner"]
     assert len(RULES) > 0
+
+
+async def test_exceptions_from_another_tenant_never_apply(pool):
+    """Bob registers the same AWS account and accepts the same risk; Alice's scans must not see it."""
+    alice, alice_acct = await _account(pool, "alice2@x.io")
+    bob = await _user(pool, "bob2@x.io")
+    bob_acct = await store.ensure_ambient_account(pool, bob, "111122223333")
+    await store.create_exception(pool, bob, bob_acct, "SEC-EBS-001", "vol-1", "Bob accepts this on his side", _future())
+    # Bob also cannot create one on Alice's account.
+    assert (
+        await store.create_exception(pool, bob, alice_acct, "SEC-EBS-001", "vol-1", "Not his account", _future())
+        is None
+    )
+    alice_scan = await store.create_scan(pool, alice_acct, "us-east-1", True)
+    _, exceptions = await store.load_scan_inputs(pool, alice_scan)
+    assert exceptions == {}
+    bob_scan = await store.create_scan(pool, bob_acct, "us-east-1", True)
+    _, bob_exceptions = await store.load_scan_inputs(pool, bob_scan)
+    assert set(bob_exceptions) == {("SEC-EBS-001", "vol-1")}
+
+
+async def test_api_reports_disposition(pool):
+    import httpx
+
+    import main
+    from auth import create_token
+
+    uid, acct = await _account(pool, "carol@x.io")
+    exc = await store.create_exception(pool, uid, acct, "SEC-EBS-001", "vol-1", "Accepted pending migration", _future())
+    scan_id = await store.create_scan(pool, acct, "us-east-1", True)
+    accepted = _eval(rid="vol-1")
+    accepted.exception_id = exc["id"]
+    await store.complete_scan(
+        pool, scan_id, _report([accepted, _eval(rid="vol-2"), _eval(rid="ok", status=Status.PASS)])
+    )
+    main.app.state.db_pool = pool
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url="http://test") as client:
+        r = await client.get(
+            f"/api/governance/scans/{scan_id}/evaluations", headers={"Authorization": f"Bearer {create_token(uid)}"}
+        )
+    by_resource = {i["resource_id"]: i for i in r.json()["items"]}
+    assert by_resource["vol-1"]["status"] == "fail" and by_resource["vol-1"]["disposition"] == "accepted_risk"
+    assert by_resource["vol-1"]["severity"] == "medium"  # severity preserved
+    assert by_resource["vol-2"]["disposition"] == "open"
+    assert by_resource["ok"]["disposition"] is None
+
+
+async def test_trends_mark_scoring_method_changes(pool):
+    """Scans scored before scoring_version 2 have no version in their stored posture."""
+    uid, acct = await _account(pool, "dave@x.io")
+    for _ in range(2):
+        scan_id = await store.create_scan(pool, acct, "us-east-1", True)
+        await store.complete_scan(pool, scan_id, _report([_eval(rid="ok", status=Status.PASS)]))
+    async with pool.acquire() as conn:  # make the first scan look like a version-1 result
+        await conn.execute(
+            "UPDATE governance_scans SET posture = posture - 'scoring_version' WHERE id = "
+            "(SELECT min(id) FROM governance_scans WHERE account_id = $1)",
+            acct,
+        )
+    points = await store.trends(pool, uid, acct)
+    assert [p["scoring_version"] for p in points] == [1, 2]
+    assert [p["scoring_changed"] for p in points] == [False, True]
+    assert [p["rule_set_changed"] for p in points] == [False, False]

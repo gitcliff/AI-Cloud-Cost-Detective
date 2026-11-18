@@ -186,7 +186,8 @@ def ev(status, severity=Severity.MEDIUM, scope=Scope.RESOURCE, rule="R", rid="r"
 
 class TestPosture:
     def test_weighted_by_severity(self):
-        p = compute_posture([ev(Status.PASS, Severity.LOW), ev(Status.FAIL, Severity.HIGH)])
+        # Two rules: a low rule that passes and a high rule that fails -> (1*1 + 4*0) / (1+4)
+        p = compute_posture([ev(Status.PASS, Severity.LOW, rule="A"), ev(Status.FAIL, Severity.HIGH, rule="B")])
         assert p.score == pytest.approx(100 * 1 / 5, abs=0.1)
         assert p.overall_status == OverallStatus.ATTENTION
 
@@ -213,7 +214,9 @@ class TestPosture:
     def test_exceptions_counted_separately(self):
         p = compute_posture([ev(Status.PASS), ev(Status.FAIL, rid="x", exception_id=1)])
         assert (p.score, p.counts["fail"], p.counts["excepted"]) == (100.0, 0, 1)
-        assert p.overall_status == OverallStatus.PASS
+        # Accepted risk is a disposition, not a pass: the scan can't report PASS.
+        assert p.overall_status == OverallStatus.ATTENTION
+        assert "1 failure(s) with accepted risk" in p.status_reasons
 
     def test_scopes_normalised_before_blending(self):
         many_resource_passes = [ev(Status.PASS, rid=str(i)) for i in range(100)]
@@ -237,3 +240,253 @@ class TestPosture:
             [ev(Status.FAIL, Severity.HIGH, rule="SEC-S3-003", kind=Kind.CONFIRMED)], gate_rules={"SEC-S3-003"}
         )
         assert p.overall_status == OverallStatus.FAIL
+
+
+# ── Rule-level aggregation, coverage, gates, dispositions (scoring_version 2) ─
+
+
+class TestRuleLevelScoring:
+    def test_many_resources_cannot_dominate_a_rule_with_few(self):
+        evals = [ev(Status.PASS, Severity.LOW, rule="MANY", rid=str(i)) for i in range(200)]
+        evals.append(ev(Status.FAIL, Severity.HIGH, rule="ONE", rid="x"))
+        p = compute_posture(evals)
+        # Per-evaluation weighting would give 200/(200+4) = 98%; per-rule gives 1/(1+4) = 20%.
+        assert p.score == 20.0
+        assert p.scoring_version == 2
+
+    def test_rule_pass_rate_and_single_weight(self):
+        evals = [ev(Status.PASS, rule="A", rid=str(i)) for i in range(3)] + [ev(Status.FAIL, rule="A", rid="f")]
+        p = compute_posture(evals)
+        (row,) = p.rule_scores
+        assert (row["pass"], row["fail"], row["pass_rate"], row["weight"]) == (3, 1, 0.75, 2)
+        assert p.score == 75.0
+
+    def test_configured_severity_is_the_weight(self):
+        evals = [ev(Status.PASS, Severity.LOW, rule="A"), ev(Status.FAIL, Severity.LOW, rule="B")]
+        p = compute_posture(evals, rule_severities={"A": Severity.LOW, "B": Severity.CRITICAL})
+        assert p.score == pytest.approx(100 * 1 / 9, abs=0.1)
+        # Without configuration, the highest evaluated severity of the rule is used.
+        fallback = compute_posture(
+            [ev(Status.PASS, Severity.LOW, rule="A", rid="1"), ev(Status.FAIL, Severity.HIGH, rule="A")]
+        )
+        assert fallback.rule_scores[0]["severity"] == "high"
+
+    @pytest.mark.parametrize(
+        "statuses,reason",
+        [
+            ([Status.UNKNOWN, Status.UNKNOWN], "unknown"),
+            ([Status.NOT_APPLICABLE], "not_applicable"),
+            (["excepted"], "excepted"),
+        ],
+    )
+    def test_unscoreable_rules_excluded_and_reported(self, statuses, reason):
+        other = [ev(Status.PASS, rule="OK")]
+        evals = [
+            ev(Status.FAIL, rule="X", rid=str(i), exception_id=1) if s == "excepted" else ev(s, rule="X", rid=str(i))
+            for i, s in enumerate(statuses)
+        ]
+        p = compute_posture(other + evals)
+        x = next(r for r in p.rule_scores if r["rule_id"] == "X")
+        assert (x["scored"], x["unscored_reason"], x["pass_rate"]) == (False, reason, None)
+        assert p.score == 100.0  # X is outside the denominator
+
+    def test_zero_weight_rule_is_not_scored(self):
+        p = compute_posture([ev(Status.FAIL, Severity.INFO, rule="I"), ev(Status.PASS, rule="OK")])
+        assert next(r for r in p.rule_scores if r["rule_id"] == "I")["unscored_reason"] == "zero_weight"
+        assert p.score == 100.0
+
+
+class TestCoverageAndScopes:
+    def test_scope_and_overall_coverage(self):
+        evals = [
+            ev(Status.PASS, scope=Scope.ACCOUNT, rule="A1"),
+            ev(Status.UNKNOWN, scope=Scope.ACCOUNT, rule="A2"),
+            ev(Status.PASS, rule="R1", rid="1"),
+            ev(Status.FAIL, rule="R1", rid="2", exception_id=4),  # assessed, so counts toward coverage
+            ev(Status.NOT_APPLICABLE, rule="R2"),  # excluded from coverage
+        ]
+        p = compute_posture(evals)
+        assert p.scope_coverage == {"account": 0.5, "resource": 1.0}
+        assert p.coverage == 0.75
+
+    def test_unevaluable_scope_is_not_silently_blended(self):
+        evals = [ev(Status.UNKNOWN, scope=Scope.ACCOUNT, rule="A1")] + [
+            ev(Status.PASS, rule="R1", rid=str(i)) for i in range(9)
+        ]
+        p = compute_posture(evals)
+        assert p.score == 100.0 and p.score_scopes == ["resource"]
+        assert p.unevaluable_scopes == ["account"] and p.scope_scores["account"] is None
+        assert p.overall_status == OverallStatus.INCOMPLETE
+        assert any("account" in r for r in p.status_reasons)
+
+    def test_empty_or_not_applicable_scope_is_not_unevaluable(self):
+        p = compute_posture([ev(Status.NOT_APPLICABLE, scope=Scope.ACCOUNT, rule="A1"), ev(Status.PASS, rule="R1")])
+        assert p.unevaluable_scopes == [] and p.score_scopes == ["resource"]
+        assert p.overall_status == OverallStatus.PASS
+
+    def test_no_scoreable_controls(self):
+        for evals in ([], [ev(Status.NOT_APPLICABLE)], [ev(Status.UNKNOWN)]):
+            p = compute_posture(evals)
+            assert p.score is None and p.overall_status == OverallStatus.INCOMPLETE
+
+    def test_critical_control_coverage(self):
+        evals = [ev(Status.PASS, rule="R1", rid=str(i)) for i in range(20)] + [ev(Status.UNKNOWN, rule="GATE")]
+        p = compute_posture(evals, gate_rules={"GATE"})
+        assert p.critical_controls == ["GATE"] and p.critical_coverage == 0.0
+        assert p.coverage > 0.9  # overall coverage alone would have hidden this
+        assert p.overall_status == OverallStatus.INCOMPLETE
+        assert "Some critical controls could not be evaluated" in p.status_reasons
+
+    def test_critical_severity_rules_are_critical_controls(self):
+        p = compute_posture(
+            [ev(Status.PASS, Severity.CRITICAL, rule="C"), ev(Status.PASS, rule="R")],
+            rule_severities={"C": Severity.CRITICAL, "R": Severity.MEDIUM},
+        )
+        assert p.critical_controls == ["C"] and p.critical_coverage == 1.0
+
+
+class TestAcceptedRiskAndGates:
+    def test_accepted_gate_failure_does_not_force_fail_but_blocks_pass(self):
+        gate_fail = ev(Status.FAIL, Severity.HIGH, rule="GATE", rid="b1", kind=Kind.CONFIRMED, exception_id=9)
+        p = compute_posture([gate_fail, ev(Status.PASS, rule="R")], gate_rules={"GATE"})
+        assert p.overall_status == OverallStatus.ATTENTION
+        assert p.gate_triggered_by == [] and p.accepted_gate_failures == ["GATE:b1"]
+        # The technical failure and its severity are preserved, as a disposition.
+        assert (gate_fail.status, gate_fail.severity, gate_fail.disposition) == (
+            Status.FAIL,
+            Severity.HIGH,
+            "accepted_risk",
+        )
+        assert gate_fail.to_dict()["disposition"] == "accepted_risk"
+
+    def test_open_gate_failure_still_fails_alongside_accepted_one(self):
+        evals = [
+            ev(Status.FAIL, Severity.HIGH, rule="GATE", rid="b1", kind=Kind.CONFIRMED, exception_id=9),
+            ev(Status.FAIL, Severity.HIGH, rule="GATE", rid="b2", kind=Kind.CONFIRMED),
+        ]
+        p = compute_posture(evals, gate_rules={"GATE"})
+        assert p.overall_status == OverallStatus.FAIL
+        assert p.gate_triggered_by == ["GATE:b2"] and p.accepted_gate_failures == ["GATE:b1"]
+
+    def test_dispositions(self):
+        assert ev(Status.FAIL).disposition == "open"
+        assert ev(Status.FAIL, exception_id=1).disposition == "accepted_risk"
+        assert ev(Status.PASS).disposition is None and ev(Status.UNKNOWN).disposition is None
+
+    def test_only_supplied_active_exceptions_apply(self, policy, ctx):
+        """Engine-side: an exception affects scoring only if the scan loaded it for this
+        account (expired/revoked/other-account ones are filtered when loading, see the DB tests)."""
+        from governance.engine import apply_exceptions
+
+        evals = [ev(Status.FAIL, rule="R", rid="a"), ev(Status.FAIL, rule="R", rid="b")]
+        apply_exceptions(evals, {("R", "a"): 1, ("OTHER", "b"): 2})
+        assert [e.exception_id for e in evals] == [1, None]
+        assert compute_posture(evals).counts["fail"] == 1
+
+
+# ── Account orchestration: IAM exactly once per scan ─────────────────────────
+
+
+def _counting_collectors(snap):
+    calls = []
+
+    def make(name):
+        def collect(session, region, account_id):
+            calls.append((name, region))
+            return snap[name].items
+
+        return collect
+
+    return {name: make(name) for name in ALL_COLLECTORS}, calls
+
+
+def test_iam_collected_once_across_multiple_regions(policy):
+    from governance.engine import run_account_governance
+
+    fakes, calls = _counting_collectors(healthy_snapshot())
+    report = run_account_governance(
+        ["us-east-1", "eu-west-1", "us-east-1"],  # duplicate region is scanned once
+        session=object(),
+        account_id="111122223333",
+        policy=policy,
+        today=TODAY,
+        runtime_policy=RUNTIME_POLICY,
+        collectors=fakes,
+    )
+    iam_calls = [c for c in calls if c[0] in IAM_COLLECTORS]
+    assert sorted(n for n, _ in iam_calls) == sorted(IAM_COLLECTORS)  # each IAM collector exactly once
+    for name in REGIONAL_COLLECTORS:
+        assert sorted(r for n, r in calls if n == name) == ["eu-west-1", "us-east-1"]
+    assert report.regions == ["us-east-1", "eu-west-1"]
+    iam_evals = [e for e in report.evaluations if e.rule_id.startswith("IAM-")]
+    assert iam_evals and {e.region for e in iam_evals} == {None}
+    assert len({(e.rule_id, e.resource_id) for e in iam_evals}) == len(iam_evals)  # no per-region duplicates
+    assert {e.region for e in report.evaluations if not e.rule_id.startswith("IAM-")} == {"us-east-1", "eu-west-1"}
+    assert "eu-west-1/ebs_volumes" in report.collectors and "global/iam_access_keys" in report.collectors
+
+
+def test_single_region_wrapper_and_iam_opt_out(policy):
+    fakes, calls = _counting_collectors(healthy_snapshot())
+    report = run_governance(
+        "us-east-1",
+        session=object(),
+        account_id="111122223333",
+        policy=policy,
+        today=TODAY,
+        runtime_policy=RUNTIME_POLICY,
+        collectors=fakes,
+        include_iam=False,
+    )
+    assert not [c for c in calls if c[0] in IAM_COLLECTORS]
+    assert not [e for e in report.evaluations if e.rule_id.startswith("IAM-")]
+    assert "ebs_volumes" in report.collectors  # single-region keys stay unprefixed (API compatible)
+
+
+# ── Collector diagnostics ────────────────────────────────────────────────────
+
+
+def _two_collector_rule():
+    from governance.models import Category, RuleSpec
+
+    return RuleSpec(
+        rule_id="T-001",
+        version=1,
+        name="needs two collectors",
+        category=Category.SECURITY,
+        default_severity=Severity.LOW,
+        scope=Scope.RESOURCE,
+        resource_type="x",
+        requires=("first", "second"),
+        func=lambda snap, policy, ctx: [],
+    )
+
+
+@pytest.mark.parametrize(
+    "first,second",
+    [
+        (
+            failed("first", CollectorStatus.TIMEOUT, "ReadTimeout"),
+            failed("second", CollectorStatus.ACCESS_DENIED, "AccessDenied"),
+        ),
+        (
+            failed("first", CollectorStatus.ACCESS_DENIED, "AccessDenied"),
+            failed("second", CollectorStatus.TIMEOUT, "ReadTimeout"),
+        ),
+    ],
+)
+def test_unknown_keeps_every_failed_collector_and_picks_reason_by_priority(first, second, policy, ctx):
+    (out,) = evaluate({"first": first, "second": second}, policy, ctx, rules=(_two_collector_rule(),))
+    assert out.unknown_reason == UnknownReason.ACCESS_DENIED  # independent of requires order
+    assert set(out.evidence["collectors"]) == {"first", "second"}
+    assert {c["error_code"] for c in out.evidence["collectors"].values()} == {"ReadTimeout", "AccessDenied"}
+    assert out.details["unknown_reasons"] == ["access_denied", "timeout"]
+    assert "first (" in out.message and "second (" in out.message
+
+
+def test_missing_collector_reported_as_not_run(policy, ctx):
+    (out,) = evaluate(
+        {"first": failed("first", CollectorStatus.ERROR, "ServiceFailure")}, policy, ctx, rules=(_two_collector_rule(),)
+    )
+    assert out.evidence["collectors"]["second"]["status"] == "not_run"
+    assert out.unknown_reason == UnknownReason.API_ERROR
+    assert out.details["unknown_reasons"] == ["api_error", "collector_skipped"]

@@ -31,7 +31,10 @@
         "iam:GetCredentialReport",
         "iam:GetAccountAuthorizationDetails",
         "iam:GetAccountPasswordPolicy",
-        "iam:GetAccountSummary"
+        "iam:GetAccountSummary",
+        "iam:ListUsers",
+        "iam:ListAccessKeys",
+        "iam:GetAccessKeyLastUsed"
       ],
       "Resource": "*"
     }

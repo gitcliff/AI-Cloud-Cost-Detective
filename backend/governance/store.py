@@ -544,8 +544,8 @@ async def revoke_exception(pool: asyncpg.Pool, user_id: int, account_pk: int, ex
 async def trends(pool: asyncpg.Pool, user_id: int, account_pk: int, limit: int = 50) -> list[dict] | None:
     """Finished scans for an account, oldest first, with rule-set change markers.
 
-    Scores are only comparable between scans evaluated with the same rule versions,
-    so each point says whether the rule set changed since the previous point.
+    Scores are only comparable between scans evaluated with the same rule versions
+    and scoring method, so each point says whether either changed since the previous one.
     """
     async with pool.acquire() as conn:
         if not await _owns_account(conn, user_id, account_pk):
@@ -564,7 +564,7 @@ async def trends(pool: asyncpg.Pool, user_id: int, account_pk: int, limit: int =
             account_pk,
             limit,
         )
-    points, previous = [], None
+    points, previous, previous_scoring = [], None, None
     for r in rows:
         versions = _json(r["rule_versions"]) or {}
         posture = _json(r["posture"]) or {}
@@ -581,7 +581,12 @@ async def trends(pool: asyncpg.Pool, user_id: int, account_pk: int, limit: int =
                 "failed": (posture.get("counts") or {}).get("fail"),
                 "excepted": (posture.get("counts") or {}).get("excepted"),
                 "rule_set_changed": previous is not None and versions != previous,
+                # Scores computed by different scoring methods aren't directly comparable.
+                "scoring_version": posture.get("scoring_version", 1),
+                "scoring_changed": previous_scoring is not None
+                and posture.get("scoring_version", 1) != previous_scoring,
             }
         )
         previous = versions
+        previous_scoring = posture.get("scoring_version", 1)
     return points

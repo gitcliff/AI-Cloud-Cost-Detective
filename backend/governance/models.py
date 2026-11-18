@@ -170,7 +170,27 @@ class GovernanceEvaluation:
     def dedup_key(self) -> tuple[str, str, str | None]:
         return (self.rule_id, self.resource_id, self.region)
 
+    @property
+    def disposition(self) -> str | None:
+        """Governance disposition of a failure, separate from its technical status."""
+        return disposition_of(self.status, self.exception_id)
+
     def to_dict(self) -> dict:
         data = asdict(self)
         data["evaluated_at"] = self.evaluated_at.isoformat()
+        data["disposition"] = self.disposition
         return data
+
+
+def disposition_of(status: str, exception_id: int | None) -> str | None:
+    """'open' or 'accepted_risk' for failures; None for other results.
+
+    An accepted risk stays a FAIL with its original severity; it is never a PASS."""
+    if status != Status.FAIL:
+        return None
+    return Disposition.ACCEPTED_RISK.value if exception_id is not None else Disposition.OPEN.value
+
+
+class Disposition(StrEnum):
+    OPEN = "open"
+    ACCEPTED_RISK = "accepted_risk"
