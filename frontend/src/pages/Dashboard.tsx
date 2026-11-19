@@ -105,7 +105,7 @@ export default function Dashboard() {
     <div>
       <h1 className="text-2xl font-bold mb-1">Dashboard</h1>
       <p className="text-gray-500 text-sm mb-8">
-        Select an AWS region to scan for cost optimization opportunities
+        Select an AWS region to scan for cost optimization/governace opportunities
       </p>
 
       {error && (
