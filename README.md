@@ -53,7 +53,7 @@ Unlike tools that rely solely on AI guesses, Cloud Cost Detective calculates sav
 │         │                           │                                   │
 │         │    ┌─────────────────────────────────────────────┐            │
 │         │    │      Governance Engine (Deterministic)      │            │
-│         │    │  23 rules across 4 categories               │            │
+│         │    │  24 rules across 4 categories               │            │
 │         │    │  security · IAM · operations · tagging      │            │
 │         │    │  Posture score · risk acceptance · policy   │            │
 │         │    └──────────────────────┬──────────────────────┘            │
@@ -95,7 +95,7 @@ Start Analysis
      │          └──── Severity · Explanations · Fix commands · New findings
      │
      ├──── Governance Scan (runs in parallel, non-blocking)
-     │          └──── 23 deterministic rules across security, IAM, ops, tagging
+     │          └──── 24 deterministic rules across security, IAM, ops, tagging
      │          └──── Posture score (0–100) with coverage and severity weighting
      │          └──── Confirmed violations + potential risks + UNKNOWN (access denied)
      │
@@ -141,7 +141,7 @@ AI-Cloud-Cost-Detective/
 │           ├── Dashboard.tsx        # Region selector + analysis launcher
 │           ├── History.tsx          # Past analyses list
 │           ├── Report.tsx           # Detailed results with issue cards
-│           └── GovernanceSettings.tsx # Policy editor (thresholds, tag rules, trusted accounts)
+│           └── Governance.tsx         # Governance settings: policy editor (thresholds, tag rules, trusted accounts)
 │       └── components/governance/
 │               ├── GovernancePanel.tsx  # Violations, risks, posture summary (per-analysis)
 │               ├── EvaluationCard.tsx   # Single evaluation with evidence + remediation
@@ -167,7 +167,7 @@ AI-Cloud-Cost-Detective/
 │   ├── api.py              # REST endpoints: scan, evaluations, policy, exceptions
 │   └── rules/
 │       ├── security.py     # 8 security rules (encryption, public exposure, IMDSv2, …)
-│       ├── iam.py          # 11 IAM rules (root MFA, key age, admin access, password policy)
+│       ├── iam.py          # 12 IAM rules (root MFA, key age, admin access, password policy)
 │       ├── operations.py   # 2 operations rules (RDS backup, auto minor upgrade)
 │       └── tagging.py      # 2 tagging rules (mandatory tags, disallowed values)
 ```
@@ -248,7 +248,7 @@ Security exceptions are business decisions that need an owner, a justification, 
 | Old-gen instances | t2, m3/m4, c3/c4, r3/r4 that should be upgraded | Medium |
 | Multi-AZ RDS | Databases where single-AZ would suffice | Medium |
 
-**23 governance rules** across four categories:
+**24 governance rules** across four categories:
 
 | Category | Rule | Severity | Kind |
 |----------|------|----------|------|
@@ -530,4 +530,4 @@ All configuration is via environment variables in `backend/.env`:
 
 ## License
 
-MIT
+MIT. See [LICENSE](LICENSE).
